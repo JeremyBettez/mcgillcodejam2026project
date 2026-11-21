@@ -1,7 +1,0 @@
-#!/bin/sh
-
-# Run lint/formatter on staged files
-npx lint-staged
-
-# Run tests (core features)
-npm test
