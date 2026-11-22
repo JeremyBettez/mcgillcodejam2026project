@@ -15,7 +15,7 @@ var icon_kind := Icon.FRIENDS:
 		queue_redraw()
 var fill_color := Color(0.12, 0.6, 0.58)
 var glyph_color := Color.WHITE
-var ring_color := Color.WHITE
+var ring_color := UiStyle.CREAM # cozy cream rim
 ## Draw a soft expanding ring every couple of seconds to invite a tap.
 var pulse := false:
 	set(value):
@@ -68,7 +68,7 @@ func _draw() -> void:
 			var p := k / 0.6
 			draw_arc(c, r + 4.0 + p * 18.0, 0.0, TAU, 48, Color(fill_color, 0.55 * (1.0 - p)), 4.0 * (1.0 - p) + 1.0, true)
 	r *= 0.94 if is_down else 1.0
-	draw_circle(c + Vector2(0.0, 3.0), r, Color(0.0, 0.0, 0.0, 0.18)) # soft shadow
+	draw_circle(c + Vector2(0.0, 4.0), r, UiStyle.SHADOW) # soft warm shadow
 	draw_circle(c, r, ring_color)
 	draw_circle(c, r - maxf(3.0, r * 0.08), fill_color.darkened(0.15) if is_down else fill_color)
 	if _icon_turn != 0.0:

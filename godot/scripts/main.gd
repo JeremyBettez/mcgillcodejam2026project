@@ -11,16 +11,16 @@ extends Node3D
 ## screenshot and quit, e.g. for automated checks.
 
 const WORLD_RADIUS := 24.0
-const BLUE := Color(0.33, 0.45, 0.86)
+const BLUE := UiStyle.SKY
 const MCGILL_POSITION := Vector3(0.0, 0.0, -10.0)
 const DEMO_MODEL := "res://demo/resident_demo.glb"
 const DEMO_NAME := "Kevin Tse"
 const MAX_RESIDENTS := 15 # phone performance budget, demo friend included
 const SAVE_INTERVAL := 15.0
 const HINT := "Drag to look around, pinch to zoom. Tap the camera to add a friend."
-const TEAL := Color(0.12, 0.6, 0.58)
-const ORANGE := Color(0.98, 0.55, 0.2)
-const DARK := Color(0.13, 0.15, 0.19)
+const TEAL := UiStyle.LEAF
+const ORANGE := UiStyle.ORANGE
+const DARK := UiStyle.BROWN
 
 var camera_rig: CameraRig
 var residents: Node3D
@@ -58,6 +58,7 @@ func _ready() -> void:
 	# Pausing freezes only the residents; the camera, HUD and this script keep
 	# running so the player can look around and resume.
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	UiStyle.apply(get_tree().root) # cozy font + cream panels for every Control
 	_build_environment()
 	_build_ground()
 	residents = Node3D.new()
@@ -80,6 +81,7 @@ func _ready() -> void:
 	_build_bottom_bar()
 	_build_action_bar()
 	_build_friends_sheet()
+	UiStyle.apply_to_layers(self) # CanvasLayer UIs don't inherit the window theme
 	relay = RelayClient.new()
 	add_child(relay)
 	relay.finished.connect(_on_relay_finished)
@@ -100,10 +102,10 @@ func _ready() -> void:
 func _build_environment() -> void:
 	var env := Environment.new()
 	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color(0.62, 0.8, 0.95)
+	env.background_color = Color(0.64, 0.86, 0.98) # soft pastel sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.75, 0.78, 0.85)
-	env.ambient_light_energy = 0.6
+	env.ambient_light_color = Color(0.92, 0.88, 0.80) # warm daylight
+	env.ambient_light_energy = 0.75
 	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
 	var world_env := WorldEnvironment.new()
 	world_env.environment = env
@@ -127,7 +129,7 @@ func _build_ground() -> void:
 	grass.mesh = disc
 	grass.position.y = -0.1
 	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.45, 0.68, 0.36)
+	mat.albedo_color = Color(0.55, 0.80, 0.42) # bright pastel grass
 	grass.material_override = mat
 	add_child(grass)
 
@@ -144,20 +146,36 @@ func _build_hud() -> void:
 	layer.add_child(margin)
 	var box := VBoxContainer.new()
 	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_theme_constant_override("separation", 10)
 	margin.add_child(box)
+	# Title as a little green wooden-sign pill.
+	var sign := PanelContainer.new()
+	sign.add_theme_stylebox_override("panel", UiStyle.title_sign())
+	sign.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	sign.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(sign)
 	var title := Label.new()
 	title.text = "Photo Town"
-	title.add_theme_font_size_override("font_size", 30)
-	title.add_theme_color_override("font_outline_color", Color.BLACK)
-	title.add_theme_constant_override("outline_size", 6)
-	box.add_child(title)
+	title.add_theme_font_override("font", UiStyle.bold())
+	title.add_theme_font_size_override("font_size", 28)
+	title.add_theme_color_override("font_color", Color.WHITE)
+	title.add_theme_color_override("font_shadow_color", UiStyle.LEAF_DARK)
+	title.add_theme_constant_override("shadow_offset_y", 2)
+	sign.add_child(title)
+	# Status line inside a cream speech bubble.
+	var bubble := PanelContainer.new()
+	var bubble_style := UiStyle.bubble()
+	bubble_style.set_corner_radius_all(22)
+	bubble_style.set_content_margin_all(12)
+	bubble_style.content_margin_left = 16
+	bubble.add_theme_stylebox_override("panel", bubble_style)
+	bubble.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(bubble)
 	hud_status = Label.new()
 	hud_status.text = HINT
 	hud_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	hud_status.add_theme_font_size_override("font_size", 18)
-	hud_status.add_theme_color_override("font_outline_color", Color.BLACK)
-	hud_status.add_theme_constant_override("outline_size", 5)
-	box.add_child(hud_status)
+	hud_status.add_theme_font_size_override("font_size", 17)
+	bubble.add_child(hud_status)
 
 
 func _build_pause_ui() -> void:
@@ -167,8 +185,8 @@ func _build_pause_ui() -> void:
 
 	# Round Pause button, top right. The icon switches to Play while paused.
 	# No overlay, so the camera can still orbit and zoom while paused.
-	pause_button = RoundIconButton.new(RoundIconButton.Icon.PAUSE, 64.0, Color(1.0, 1.0, 1.0, 0.92), DARK)
-	pause_button.ring_color = Color(1.0, 1.0, 1.0, 0.6)
+	pause_button = RoundIconButton.new(RoundIconButton.Icon.PAUSE, 64.0, UiStyle.CREAM, UiStyle.BROWN)
+	pause_button.ring_color = UiStyle.TAN
 	pause_button.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT, Control.PRESET_MODE_MINSIZE, 18)
 	pause_button.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	pause_button.pressed.connect(toggle_pause)
@@ -229,11 +247,7 @@ func _build_friends_sheet() -> void:
 	layer.layer = 4
 	add_child(layer)
 	friends_sheet = PanelContainer.new()
-	var style := StyleBoxFlat.new()
-	style.bg_color = DARK
-	style.set_corner_radius_all(18)
-	style.set_content_margin_all(16)
-	friends_sheet.add_theme_stylebox_override("panel", style)
+	friends_sheet.add_theme_stylebox_override("panel", UiStyle.bubble())
 	friends_sheet.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE, Control.PRESET_MODE_MINSIZE, 12)
 	friends_sheet.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	friends_sheet.visible = false
@@ -245,11 +259,12 @@ func _build_friends_sheet() -> void:
 	box.add_child(header)
 	friends_title = Label.new()
 	friends_title.add_theme_font_size_override("font_size", 26)
+	friends_title.add_theme_font_override("font", UiStyle.bold())
 	friends_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	friends_title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	header.add_child(friends_title)
-	var close := RoundIconButton.new(RoundIconButton.Icon.CLOSE, 48.0, Color(0.25, 0.28, 0.33), Color.WHITE)
-	close.ring_color = Color(0.25, 0.28, 0.33)
+	var close := RoundIconButton.new(RoundIconButton.Icon.CLOSE, 48.0, UiStyle.CREAM_DARK, UiStyle.BROWN)
+	close.ring_color = UiStyle.TAN
 	close.pressed.connect(_close_friends_sheet)
 	header.add_child(close)
 	var scroll := ScrollContainer.new()
@@ -427,10 +442,8 @@ func _build_action_bar() -> void:
 	layer.layer = 3
 	add_child(layer)
 	action_bar = PanelContainer.new()
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.13, 0.15, 0.19)
-	style.set_corner_radius_all(12)
-	style.set_content_margin_all(12)
+	var style := UiStyle.bubble()
+	style.set_content_margin_all(14)
 	action_bar.add_theme_stylebox_override("panel", style)
 	action_bar.custom_minimum_size = Vector2(500.0, 0.0)
 	action_bar.set_anchors_and_offsets_preset(Control.PRESET_CENTER_BOTTOM, Control.PRESET_MODE_MINSIZE, 140)

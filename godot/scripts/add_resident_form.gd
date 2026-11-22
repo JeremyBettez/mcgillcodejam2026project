@@ -38,26 +38,27 @@ func _ready() -> void:
 	var card := PanelContainer.new()
 	_card = card
 	card.custom_minimum_size = Vector2(500.0, 0.0)
-	var card_style := StyleBoxFlat.new()
-	card_style.bg_color = Color(0.13, 0.15, 0.19)
-	card_style.set_corner_radius_all(14)
-	card_style.set_content_margin_all(18)
-	card.add_theme_stylebox_override("panel", card_style)
+	card.add_theme_stylebox_override("panel", UiStyle.bubble())
 	center.add_child(card)
 
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 12)
 	card.add_child(box)
 
-	box.add_child(_label("Add a friend", 28))
+	var heading := _label("Add a friend", 28)
+	heading.add_theme_font_override("font", UiStyle.bold())
+	box.add_child(heading)
 	var tip := _label("Full body in the photo: head to feet, facing the camera, arms a little away from the body.", 16)
-	tip.modulate = Color(0.8, 0.85, 0.9)
+	tip.add_theme_color_override("font_color", UiStyle.BROWN_SOFT)
 	box.add_child(tip)
 
 	var preview_frame := PanelContainer.new()
 	var frame_style := StyleBoxFlat.new()
-	frame_style.bg_color = Color(0.08, 0.09, 0.11)
-	frame_style.set_corner_radius_all(10)
+	frame_style.bg_color = UiStyle.CREAM_DARK
+	frame_style.set_corner_radius_all(22)
+	frame_style.set_border_width_all(3)
+	frame_style.border_color = UiStyle.TAN
+	frame_style.anti_aliasing = true
 	preview_frame.add_theme_stylebox_override("panel", frame_style)
 	preview_frame.custom_minimum_size = Vector2(0.0, 280.0)
 	box.add_child(preview_frame)
@@ -68,7 +69,7 @@ func _ready() -> void:
 	_preview_hint = _label("No photo yet", 18)
 	_preview_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_preview_hint.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_preview_hint.modulate = Color(0.6, 0.65, 0.7)
+	_preview_hint.add_theme_color_override("font_color", UiStyle.BROWN_SOFT)
 	preview_frame.add_child(_preview_hint)
 
 	var photo_row := HBoxContainer.new()
@@ -97,7 +98,7 @@ func _ready() -> void:
 
 
 	_status = _label("", 16)
-	_status.modulate = Color(1.0, 0.6, 0.55)
+	_status.add_theme_color_override("font_color", Color(0.85, 0.3, 0.25))
 	_status.visible = false
 	box.add_child(_status)
 
@@ -108,6 +109,12 @@ func _ready() -> void:
 	cancel.pressed.connect(close)
 	_generate = _button("Generate", actions)
 	_generate.pressed.connect(_on_generate)
+	# Main action: a green pill with white text.
+	_generate.add_theme_stylebox_override("normal", UiStyle.pill(UiStyle.LEAF, 4, UiStyle.LEAF_DARK))
+	_generate.add_theme_stylebox_override("hover", UiStyle.pill(UiStyle.LEAF.lightened(0.08), 4, UiStyle.LEAF_DARK))
+	_generate.add_theme_stylebox_override("pressed", UiStyle.pill(UiStyle.LEAF_DARK, 1, UiStyle.LEAF_DARK))
+	for state in ["font_color", "font_hover_color", "font_pressed_color", "font_hover_pressed_color"]:
+		_generate.add_theme_color_override(state, Color.WHITE)
 
 	if not bridge.is_available():
 		_camera_button.disabled = true

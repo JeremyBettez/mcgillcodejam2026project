@@ -119,7 +119,9 @@ func _ready() -> void:
 	name_tag.fixed_size = true
 	name_tag.pixel_size = 0.0012
 	name_tag.font_size = 32
-	name_tag.outline_size = 10
+	name_tag.outline_size = 12
+	name_tag.font = UiStyle.bold()
+	name_tag.outline_modulate = UiStyle.BROWN
 	name_tag.position.y = HEIGHT + 0.25
 	add_child(name_tag)
 

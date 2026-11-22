@@ -32,7 +32,7 @@ func _ready() -> void:
 	disc.rings = 1
 	_pad.mesh = disc
 	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.52, 0.75, 0.42)
+	mat.albedo_color = Color(0.62, 0.85, 0.48)
 	_pad.material_override = mat
 	_pad.position.y = 0.005
 	add_child(_pad)
