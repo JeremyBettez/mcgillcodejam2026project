@@ -3,7 +3,8 @@ extends RefCounted
 ## Saves the player's world on this device (user://, which is IndexedDB on web):
 ##   user://world.json            {"version": 1, "residents": [{id, name, x, z, created}]}
 ##   user://residents/<id>.glb    a friend's generated model (never the photo)
-##   world.json "places": [{id, name, x, z, yaw, flag}] + user://places/<id>.glb
+##   world.json "places": [{id, name, district, lot, flag...}] + user://places/<id>.glb
+##   world.json "layout": {builtin id: {district, lot}} (moved built-in places)
 ## Every call fails soft: it returns false/empty and the game keeps running.
 
 const INDEX_PATH := "user://world.json"
@@ -30,12 +31,12 @@ static func load_index() -> Array[Dictionary]:
 	return entries
 
 
-static func save_index(entries: Array[Dictionary], places: Array[Dictionary] = []) -> bool:
+static func save_index(entries: Array[Dictionary], places: Array[Dictionary] = [], layout: Dictionary = {}) -> bool:
 	var file := FileAccess.open(INDEX_PATH, FileAccess.WRITE)
 	if file == null:
 		push_warning("WorldStore: can't write world.json (%s)" % error_string(FileAccess.get_open_error()))
 		return false
-	file.store_string(JSON.stringify({"version": VERSION, "residents": entries, "places": places}, "  "))
+	file.store_string(JSON.stringify({"version": VERSION, "residents": entries, "places": places, "layout": layout}, "  "))
 	file.close()
 	return true
 
@@ -64,6 +65,16 @@ static func load_model(id: String) -> PackedByteArray:
 static func delete_model(id: String) -> void:
 	if FileAccess.file_exists(model_path(id)):
 		DirAccess.remove_absolute(model_path(id))
+
+
+## Where the built-in places were moved to: {location id: {district, lot}}.
+static func load_layout() -> Dictionary:
+	if not FileAccess.file_exists(INDEX_PATH):
+		return {}
+	var data: Variant = JSON.parse_string(FileAccess.get_file_as_string(INDEX_PATH))
+	if data is Dictionary and (data as Dictionary).get("layout") is Dictionary:
+		return data.layout
+	return {}
 
 
 # --- Places the player added ---------------------------------------------------

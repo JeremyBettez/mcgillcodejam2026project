@@ -52,6 +52,12 @@ var _storage_warned := false
 var _dragged: Resident # friend currently held by the player's finger
 var _grab_candidate: Resident # friend under the finger when it touched down
 var _following: Resident # thrown friend the camera follows until they land
+var _place_candidate: Location # building under the finger at touch-down
+var _moving: Location # building being carried to another plot
+var _move_from := Vector3.ZERO
+var _move_finger := Vector2(-1.0, -1.0)
+var _drop_target: Array = [] # [District, lot] under the carried building
+var _drop_marker: MeshInstance3D
 var _last_status := ""
 
 
@@ -77,6 +83,7 @@ func _ready() -> void:
 	add_child(leaves)
 	camera_rig.tapped.connect(_on_tapped)
 	camera_rig.can_grab = _can_grab
+	camera_rig.can_hold_grab = _can_hold_grab
 	camera_rig.grab_started.connect(_on_grab_started)
 	camera_rig.grab_moved.connect(_on_grab_moved)
 	camera_rig.grab_ended.connect(_on_grab_ended)
@@ -93,6 +100,7 @@ func _ready() -> void:
 	thumbnailer = Thumbnailer.new()
 	add_child(thumbnailer)
 	_build_locations()
+	_restore_layout() # built-in places the player moved to other plots
 	_restore_places() # before friends, so their saved homes can be found
 	_spawn_demo()
 	_restore_world()
@@ -905,7 +913,13 @@ func _save_world() -> void:
 				"lot": place.lot,
 				"flag": _flag_to_json(place.flag_design),
 			})
-	if not WorldStore.save_index(entries, places):
+	# Built-in places that were moved: which plot each one is on now.
+	var layout := {}
+	for id: String in locations:
+		var place: Location = locations[id]
+		if not place.user_added and not place.is_queued_for_deletion():
+			layout[id] = {"district": place.district_id, "lot": place.lot}
+	if not WorldStore.save_index(entries, places, layout):
 		_warn_storage()
 
 
@@ -1007,16 +1021,263 @@ func _ground_point(screen_pos: Vector2) -> Variant:
 	return Vector3(flat.x, 0.0, flat.y)
 
 
+# --- Moving buildings to other plots -------------------------------------------
+
+const CARRY_HEIGHT := 0.9 # a carried building floats this high
+const DROP_RANGE := 9.0 # metres from a lot's centre that still counts as on it
+const EDGE_PAN := 70.0 # pixels from the screen edge that pan the view
+const EDGE_PAN_SPEED := 16.0 # m/s at the very edge
+
+
+## The building (Location) under a screen point, or null. Buildings have walls
+## on physics layer 1.
+func _place_at(screen_pos: Vector2) -> Location:
+	var cam := camera_rig.camera
+	var from := cam.project_ray_origin(screen_pos)
+	var query := PhysicsRayQueryParameters3D.create(from, from + cam.project_ray_normal(screen_pos) * 300.0, 1)
+	var hit := get_world_3d().direct_space_state.intersect_ray(query)
+	var node: Node = hit.get("collider") if not hit.is_empty() else null
+	while node and not node is Location:
+		node = node.get_parent()
+	return node as Location
+
+
+func _start_move(place: Location) -> void:
+	_select(null)
+	_hide_actions()
+	_moving = place
+	_move_from = place.global_position
+	_set_walls_enabled(place, false) # don't shove friends around mid-air
+	if _drop_marker == null:
+		_drop_marker = MeshInstance3D.new()
+		var disc := CylinderMesh.new()
+		disc.top_radius = 5.0
+		disc.bottom_radius = 5.0
+		disc.height = 0.03
+		disc.radial_segments = 40
+		disc.rings = 1
+		_drop_marker.mesh = disc
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.albedo_color = Color(UiStyle.YELLOW, 0.5)
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_drop_marker.material_override = mat
+		locations_root.add_child(_drop_marker)
+	_drop_marker.visible = false
+	hud_status.text = "Drag %s to another plot. Drop it on a building to swap them." % place.display_name
+
+
+## Each frame while carrying: pan at the screen edges, float the building under
+## the finger, and highlight the plot it would land on.
+func _carry_step(delta: float) -> void:
+	if not is_instance_valid(_moving):
+		_moving = null
+		return
+	if _move_finger.x < 0.0:
+		return
+	var view := get_viewport().get_visible_rect().size
+	var push := Vector2.ZERO
+	push.x = clampf((EDGE_PAN - _move_finger.x) / EDGE_PAN, 0.0, 1.0) * -1.0 + clampf((_move_finger.x - (view.x - EDGE_PAN)) / EDGE_PAN, 0.0, 1.0)
+	push.y = clampf((EDGE_PAN - _move_finger.y) / EDGE_PAN, 0.0, 1.0) * -1.0 + clampf((_move_finger.y - (view.y - EDGE_PAN)) / EDGE_PAN, 0.0, 1.0)
+	if push != Vector2.ZERO:
+		camera_rig.nudge(Vector3(push.x, 0.0, push.y) * EDGE_PAN_SPEED * delta)
+	var point: Variant = _ground_point(_move_finger)
+	if point is Vector3:
+		var goal := Vector3((point as Vector3).x, CARRY_HEIGHT, (point as Vector3).z)
+		_moving.global_position = _moving.global_position.lerp(goal, 1.0 - exp(-14.0 * delta))
+	_drop_target = _nearest_lot(_moving.global_position)
+	_drop_marker.visible = not _drop_target.is_empty()
+	if _drop_marker.visible:
+		var district: District = _drop_target[0]
+		_drop_marker.global_position = district.lot_position(_drop_target[1]) + Vector3(0.0, 0.02 + 0.01 * sin(Time.get_ticks_msec() * 0.008), 0.0)
+
+
+## The lot (in any district) nearest to a point, within DROP_RANGE: [District, lot] or [].
+func _nearest_lot(point: Vector3) -> Array:
+	var best: Array = []
+	var best_d := DROP_RANGE
+	for id: String in districts:
+		var district: District = districts[id]
+		for lot in District.LOTS.size():
+			var at := district.lot_position(lot)
+			var d := Vector2(at.x - point.x, at.z - point.z).length()
+			if d < best_d:
+				best_d = d
+				best = [district, lot]
+	return best
+
+
+func _finish_move() -> void:
+	var place := _moving
+	_moving = null
+	_move_finger = Vector2(-1.0, -1.0)
+	if _drop_marker:
+		_drop_marker.visible = false
+	if not is_instance_valid(place):
+		return
+	var lifted := place.global_position
+	var target := _drop_target
+	_drop_target = []
+	if target.is_empty() or (target[0] as District).district_id == place.district_id and int(target[1]) == place.lot:
+		_glide(place, lifted, _move_from)
+		_set_walls_enabled(place, true)
+		hud_status.text = "%s stays where it was." % place.display_name
+		return
+	var district: District = target[0]
+	var other_id: String = district.occupants[int(target[1])]
+	var other: Location = locations.get(other_id)
+	var other_from := other.global_position if other else Vector3.ZERO
+	_relocate(place, district, int(target[1]))
+	_glide(place, lifted, place.global_position, true)
+	_set_walls_enabled(place, true)
+	if other:
+		_glide(other, other_from, other.global_position, true)
+		hud_status.text = "%s and %s swapped plots." % [place.display_name, other.display_name]
+	else:
+		hud_status.text = "%s moved to %s." % [place.display_name, district.display_name]
+	# Friends who hang out there head to the new spot.
+	for friend in _friends():
+		if friend.home == place or (other and friend.home == other):
+			friend.go_home()
+	_save_world()
+
+
+## Put `place` on a lot; if another place is there, it swaps onto `place`'s old lot.
+func _relocate(place: Location, district: District, lot: int) -> void:
+	var old_district: District = districts.get(place.district_id)
+	var old_lot := place.lot
+	var other_id: String = district.occupants[lot]
+	if old_district:
+		old_district.release(place.location_id)
+	if not other_id.is_empty() and other_id != place.location_id:
+		district.release(other_id)
+		var other: Location = locations.get(other_id)
+		if other and old_district:
+			_put_in_lot(other, old_district, old_lot)
+	_put_in_lot(place, district, lot)
+
+
+## Animate a building from `from` to where it now belongs (`to`), landing with a
+## bounce; `celebrate` adds the golden ring burst as it lands.
+func _glide(place: Location, from: Vector3, to: Vector3, celebrate := false) -> void:
+	place.global_position = from
+	var tween := create_tween()
+	tween.tween_property(place, "global_position", to, 0.45).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	if celebrate:
+		tween.tween_callback(_ring_burst.bind(to))
+
+
+## A small golden ring that pops up around a newly placed building, grows,
+## rises a little and fades away, with a puff of gold sparkles flying outward.
+func _ring_burst(at: Vector3) -> void:
+	var gold := Color(1.0, 0.80, 0.25)
+	for i in 2: # a bright ring and a softer, later echo
+		var ring := MeshInstance3D.new()
+		var torus := TorusMesh.new()
+		torus.inner_radius = 0.82
+		torus.outer_radius = 1.0
+		torus.rings = 48
+		torus.ring_segments = 6
+		ring.mesh = torus
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.albedo_color = Color(gold, 0.0)
+		ring.material_override = mat
+		ring.position = at + Vector3(0.0, 0.15, 0.0)
+		ring.scale = Vector3.ONE * 1.5
+		locations_root.add_child(ring)
+		var delay := 0.12 * i
+		var tween := create_tween().set_parallel(true)
+		tween.tween_property(mat, "albedo_color:a", 0.95 - 0.35 * i, 0.12).set_delay(delay)
+		tween.tween_property(ring, "scale", Vector3(7.0, 1.0, 7.0), 0.9).set_delay(delay).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+		tween.tween_property(ring, "position:y", at.y + 1.2, 0.9).set_delay(delay).set_ease(Tween.EASE_OUT)
+		tween.tween_property(mat, "albedo_color:a", 0.0, 0.6).set_delay(delay + 0.35)
+		tween.chain().tween_callback(ring.queue_free)
+	# Sparkles bursting out and drifting down.
+	var sparkles := CPUParticles3D.new()
+	var dot := SphereMesh.new()
+	dot.radius = 0.08
+	dot.height = 0.16
+	dot.radial_segments = 6
+	dot.rings = 3
+	var dot_mat := StandardMaterial3D.new()
+	dot_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	dot_mat.vertex_color_use_as_albedo = true
+	dot_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	dot.material = dot_mat
+	sparkles.mesh = dot
+	sparkles.one_shot = true
+	sparkles.explosiveness = 0.9
+	sparkles.amount = 28
+	sparkles.lifetime = 1.0
+	sparkles.direction = Vector3.UP
+	sparkles.spread = 75.0
+	sparkles.initial_velocity_min = 3.0
+	sparkles.initial_velocity_max = 6.0
+	sparkles.gravity = Vector3(0.0, -6.0, 0.0)
+	sparkles.emission_shape = CPUParticles3D.EMISSION_SHAPE_RING
+	sparkles.emission_ring_axis = Vector3.UP
+	sparkles.emission_ring_radius = 3.5
+	sparkles.emission_ring_inner_radius = 2.5
+	sparkles.emission_ring_height = 0.1
+	var fade := Gradient.new()
+	fade.offsets = PackedFloat32Array([0.0, 0.7, 1.0])
+	fade.colors = PackedColorArray([gold.lightened(0.3), gold, Color(gold, 0.0)])
+	sparkles.color_ramp = fade
+	sparkles.position = at + Vector3(0.0, 0.3, 0.0)
+	locations_root.add_child(sparkles)
+	sparkles.emitting = true
+	get_tree().create_timer(2.0).timeout.connect(sparkles.queue_free)
+
+
+func _set_walls_enabled(place: Location, on: bool) -> void:
+	for body in place.find_children("*", "StaticBody3D", true, false):
+		(body as StaticBody3D).collision_layer = 1 if on else 0
+
+
+## Move built-in places back to the plots the player put them on.
+func _restore_layout() -> void:
+	var layout := WorldStore.load_layout()
+	for id: String in layout:
+		var place: Location = locations.get(id)
+		var entry: Variant = layout[id]
+		if place == null or place.user_added or not entry is Dictionary:
+			continue
+		var slot := District.slot_index(str(entry.get("district", "")))
+		var lot := int(entry.get("lot", -1))
+		if slot == -1 or lot < 0 or lot >= District.LOTS.size():
+			continue
+		var district: District = districts.get(District.SLOTS[slot].id)
+		if district == null:
+			district = _add_district(slot)
+		if district.district_id != place.district_id or lot != place.lot:
+			_relocate(place, district, lot)
+
+
 # --- Picking friends up -------------------------------------------------------
 
 ## Called on touch-down: remember who is under the finger, so the grab (which
 ## starts a moment later) gets that friend even if they've moved since.
 func _can_grab(screen_pos: Vector2) -> bool:
 	_grab_candidate = _resident_at(screen_pos)
+	_place_candidate = null
 	return _grab_candidate != null
 
 
+## Called on touch-down when no friend is under the finger: is it a building?
+## (Picked up by a long press; dragging sooner pans the view as usual.)
+func _can_hold_grab(screen_pos: Vector2) -> bool:
+	_place_candidate = _place_at(screen_pos)
+	return _place_candidate != null
+
+
 func _on_grab_started(screen_pos: Vector2) -> void:
+	if _grab_candidate == null and _place_candidate and is_instance_valid(_place_candidate):
+		_start_move(_place_candidate)
+		_place_candidate = null
+		_move_finger = screen_pos
+		return
 	var friend := _grab_candidate
 	_grab_candidate = null
 	if friend == null or not is_instance_valid(friend) or friend.is_queued_for_deletion():
@@ -1032,6 +1293,9 @@ func _on_grab_started(screen_pos: Vector2) -> void:
 
 
 func _on_grab_moved(screen_pos: Vector2) -> void:
+	if _moving:
+		_move_finger = screen_pos
+		return
 	if _dragged and is_instance_valid(_dragged):
 		var point: Variant = _ground_point(screen_pos)
 		if point is Vector3:
@@ -1039,6 +1303,9 @@ func _on_grab_moved(screen_pos: Vector2) -> void:
 
 
 func _on_grab_ended(_screen_pos: Vector2) -> void:
+	if _moving:
+		_finish_move()
+		return
 	if _dragged and is_instance_valid(_dragged):
 		var speed := _dragged.drop()
 		if speed > 2.0:
@@ -1052,7 +1319,9 @@ func _on_grab_ended(_screen_pos: Vector2) -> void:
 	_dragged = null
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	if _moving:
+		_carry_step(delta)
 	# Animate the status line whenever its message changes.
 	if hud_status.text != _last_status:
 		_last_status = hud_status.text

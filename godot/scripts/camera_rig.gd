@@ -14,6 +14,7 @@ signal grab_moved(screen_pos: Vector2)
 signal grab_ended(screen_pos: Vector2)
 
 const HOLD_TIME := 0.22 # seconds a finger must rest on a friend to pick them up
+const LONG_HOLD := 0.45 # ...or on a building (dragging sooner pans instead)
 
 const YAW := 0.0 # fixed: looking north (-Z), fronts face +Z
 const NEAR_PITCH := deg_to_rad(-24.0) # zoomed in: closer to eye level
@@ -34,6 +35,9 @@ var bounds := Rect2()
 var velocity := Vector3.ZERO
 ## func(screen_pos: Vector2) -> bool: is there something to pick up at this point?
 var can_grab := Callable()
+## func(screen_pos) -> bool: something that can only be picked up by a long
+## press (buildings), so a drag that starts on it still pans the view.
+var can_hold_grab := Callable()
 
 var _zoom_goal := 10.0
 var _touches := {} # index -> current position
@@ -47,6 +51,7 @@ var _fling := Vector3.ZERO
 var _last_position := Vector3.ZERO
 var _pending_index := -1
 var _pending_time := 0.0
+var _hold_only := false # the pending grab needs a long, still press
 var _grab_index := -1
 
 
@@ -99,8 +104,14 @@ func _touch(index: int, pressed: bool, pos: Vector2) -> void:
 		if _touches.size() == 1 and can_grab.is_valid() and can_grab.call(pos):
 			_pending_index = index # becomes a grab if held or dragged
 			_pending_time = 0.0
+			_hold_only = false
+		elif _touches.size() == 1 and can_hold_grab.is_valid() and can_hold_grab.call(pos):
+			_pending_index = index # becomes a grab only if held still
+			_pending_time = 0.0
+			_hold_only = true
 		elif _touches.size() == 2:
 			_pending_index = -1
+			_hold_only = false
 			_was_multi = true
 			_panning = false
 			_start_pinch()
@@ -138,10 +149,17 @@ func _drag(index: int, pos: Vector2, _relative: Vector2) -> void:
 		return
 	if index == _pending_index:
 		var start: Vector2 = _touch_start.get(index, pos)
-		if start.distance_to(pos) >= TAP_SLOP:
+		if _hold_only:
+			if start.distance_to(pos) < TAP_SLOP:
+				return
+			_pending_index = -1 # moved before the long press: it's a pan
+			_hold_only = false
+		elif start.distance_to(pos) >= TAP_SLOP:
 			_begin_grab()
 			grab_moved.emit(pos)
-		return # small wiggles on a friend shouldn't move the camera
+			return
+		else:
+			return # small wiggles on a friend shouldn't move the camera
 	if _touches.size() == 1 and not _was_multi:
 		var start: Vector2 = _touch_start.get(index, pos)
 		if not _panning and start.distance_to(pos) < TAP_SLOP:
@@ -192,9 +210,17 @@ func view_from(point: Vector3, _facing: Vector3, _view_pitch: float, view_distan
 	_zoom_goal = clampf(view_distance, MIN_DISTANCE, MAX_DISTANCE)
 
 
+## Slide the view by `offset` (e.g. edge-panning while carrying a building).
+func nudge(offset: Vector3) -> void:
+	_fling = Vector3.ZERO
+	_focus = _clamp_to_bounds(_focus + Vector3(offset.x, 0.0, offset.z))
+	position = _focus
+
+
 func _begin_grab() -> void:
 	_grab_index = _pending_index
 	_pending_index = -1
+	_hold_only = false
 	grab_started.emit(_touches.get(_grab_index, Vector2.ZERO))
 
 
@@ -205,7 +231,7 @@ func is_grabbing() -> bool:
 func _process(delta: float) -> void:
 	if _pending_index != -1:
 		_pending_time += delta
-		if _pending_time >= HOLD_TIME:
+		if _pending_time >= (LONG_HOLD if _hold_only else HOLD_TIME):
 			_begin_grab()
 	# Flick glide, slowing down; stop at the edge of town.
 	if _fling.length_squared() > 0.01:

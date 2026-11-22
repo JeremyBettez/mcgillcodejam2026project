@@ -3,8 +3,8 @@ extends RefCounted
 ## Simple brand emblems drawn into Images in code (no image assets), shown on
 ## flat quads on the storefronts:
 ## - "arches": McDonald's-style golden arches (two parabolic arches).
-## - "starbucks": a round green coffee-house badge with white rings and stars
-##   (our own simplified badge; the real siren artwork is not copied).
+## - "starbucks": a round green badge with a simplified white twin-tailed siren
+##   (our own simplified drawing of the emblem).
 ## Textures are cached and drawn 2x2 supersampled for smooth edges.
 
 const SIZE := 256
@@ -58,22 +58,69 @@ static func _arches() -> Image:
 		return Color(0, 0, 0, 0))
 
 
-## Round green badge: green disc, thin white rim, white inner ring, a big white
-## star in the middle and small stars either side.
+## Round green coffee badge with a simplified twin-tailed siren in white: a
+## crowned face with a star on the crown, long wavy hair falling on both
+## sides, and her two tails raised up beside her head. Our own simplified
+## drawing in the spirit of the Starbucks emblem.
 static func _starbucks() -> Image:
 	var green := Color(0.0, 0.44, 0.29)
-	var big := _star_polygon(Vector2.ZERO, 0.42)
-	var left := _star_polygon(Vector2(-0.76, 0.0), 0.085)
-	var right := _star_polygon(Vector2(0.76, 0.0), 0.085)
+	var crown_star := _star_polygon(Vector2(0.0, 0.47), 0.075)
+	var crown := PackedVector2Array([
+		Vector2(-0.24, 0.33), Vector2(-0.26, 0.47), Vector2(-0.15, 0.40), Vector2(-0.09, 0.57),
+		Vector2(0.0, 0.62), Vector2(0.09, 0.57), Vector2(0.15, 0.40), Vector2(0.26, 0.47), Vector2(0.24, 0.33),
+	])
+	# Each tail: a centre line from under the hair, sweeping out and up, plus a
+	# forked fin at the top.
+	var tail_line := PackedVector2Array()
+	for i in 21:
+		var t := i / 20.0
+		tail_line.append(Vector2(0.34 + 0.30 * sin(t * PI * 0.85), -0.58 + 1.08 * t - 0.12 * t * t))
+	var fins: Array[PackedVector2Array] = []
+	for side in [-1.0, 1.0]:
+		fins.append(PackedVector2Array([
+			Vector2(0.56 * side, 0.34), Vector2(0.44 * side, 0.70), Vector2(0.55 * side, 0.58),
+			Vector2(0.62 * side, 0.78), Vector2(0.68 * side, 0.56), Vector2(0.66 * side, 0.34),
+		]))
 	return _draw(SIZE, SIZE, func(u: float, v: float) -> Color:
 		var p := Vector2(u, v * 2.0 - 1.0)
 		var r := p.length()
 		if r > 1.0:
 			return Color(0, 0, 0, 0)
-		if (r > 0.9 and r < 0.95) or (r > 0.6 and r < 0.64):
+		if r > 0.9 and r < 0.94:
+			return Color.WHITE # thin rim
+		if r >= 0.94:
+			return green
+		# Crown with a green star in it.
+		if Geometry2D.is_point_in_polygon(p, crown):
+			return green if Geometry2D.is_point_in_polygon(p, crown_star) else Color.WHITE
+		# Face: a white oval with green eyes and a small smile.
+		var face := Vector2(p.x / 0.2, (p.y - 0.1) / 0.25)
+		if face.length() < 1.0:
+			for ex in [-0.075, 0.075]:
+				if Vector2((p.x - ex) / 0.035, (p.y - 0.14) / 0.02).length() < 1.0:
+					return green
+			var mouth := Vector2(p.x / 0.08, (p.y - 0.02) / 0.05)
+			if mouth.length() < 1.0 and mouth.length() > 0.7 and p.y < 0.02:
+				return green
 			return Color.WHITE
-		if Geometry2D.is_point_in_polygon(p, big) or Geometry2D.is_point_in_polygon(p, left) or Geometry2D.is_point_in_polygon(p, right):
-			return Color.WHITE
+		# Hair: wavy locks framing the face and flaring out towards the
+		# shoulders, with green partings between the strands.
+		var ax := absf(p.x)
+		var outer := 0.27 + 0.13 * clampf(-p.y + 0.3, 0.0, 1.0) + 0.03 * sin(p.y * 10.0)
+		if p.y < 0.33 and p.y > -0.66 and ax < outer and (ax > 0.18 or p.y < -0.14):
+			if p.y < -0.62 + 0.04 * sin(ax * 30.0):
+				return green # wavy hair ends
+			var wave := sin((ax - 0.04 * sin(p.y * 11.0)) * 38.0)
+			return green if wave > 0.78 else Color.WHITE
+		# Tails sweeping up on both sides (thicker low down), with forked fins.
+		var q := Vector2(ax, p.y)
+		for i in tail_line.size() - 1:
+			var closest := Geometry2D.get_closest_point_to_segment(q, tail_line[i], tail_line[i + 1])
+			if q.distance_to(closest) < lerpf(0.085, 0.05, i / 20.0):
+				return Color.WHITE
+		for fin in fins:
+			if Geometry2D.is_point_in_polygon(p, fin):
+				return Color.WHITE
 		return green)
 
 

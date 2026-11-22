@@ -2,7 +2,7 @@ class_name CafeModels
 extends RefCounted
 ## Low-poly downtown storefronts built in code: a Starbucks-style café and a
 ## McDonald's-style restaurant, with brand colours, name signs and simple
-## emblems drawn in code (BrandLogos: golden arches, a round green badge).
+## emblems drawn in code (BrandLogos: golden arches, the green siren badge).
 ## Both face +Z.
 
 const STARBUCKS_FOOTPRINT := Rect2(Vector2(-3.3, -2.4), Vector2(6.6, 4.4))
