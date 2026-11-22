@@ -18,7 +18,7 @@ const KNEE_BEND := 0.7
 const ARM_SWING := 0.4
 const ARM_OUT := 0.22 # how far the lowered arms stay away from the body (x per unit down)
 const BLEND_RATE := 4.0 # how fast actions fade in/out (per second)
-const ACTIONS := ["wave", "dance"]
+const ACTIONS := ["wave", "dance", "moonwalk", "party"]
 const LIMB_SPRING := 40.0 # ragdoll limb stiffness
 const LIMB_DAMP := 5.0 # ragdoll limb damping (lower = floppier)
 const LIMB_KICK := 6.0 # how hard a bounce jolts the limbs
@@ -154,7 +154,7 @@ func setup(sk: Skeleton3D) -> bool:
 	return true
 
 
-## Start an action ("wave" or "dance") for `duration` seconds.
+## Start an action (one of ACTIONS) for `duration` seconds.
 func play(name: String, duration: float) -> void:
 	if name not in ACTIONS:
 		return
@@ -193,6 +193,11 @@ func apply(delta: float, walking: bool) -> float:
 		"dance":
 			act = _dance_pose(_action_time)
 			act_bob = -0.05 * (1.0 - cos(_action_time * TAU * 2.0)) * 0.5
+		"moonwalk":
+			act = _moonwalk_pose(_action_time)
+		"party":
+			act = _party_pose(_action_time)
+			act_bob = 0.09 * absf(sin(_action_time * TAU * 1.25)) # little hops
 	var dangle := {}
 	if dangle_weight > 0.0:
 		dangle = _ragdoll_pose(delta)
@@ -264,6 +269,54 @@ func _dance_pose(t: float) -> Dictionary:
 			pose[arm.elbow] = Quaternion(Vector3.BACK, side * 0.8)
 	if _neck != -1:
 		pose[_neck] = Quaternion(Vector3.RIGHT, 0.12 * sin(beat))
+	return pose
+
+
+## The moonwalk: legs take turns, one knee bent with the heel up while the other
+## leg slides back straight (the body glides backwards, see Resident), torso
+## leaning a touch forward, arms loose and swinging, head nodding to the beat.
+func _moonwalk_pose(t: float) -> Dictionary:
+	var pose := {}
+	var beat := t * TAU * 1.1
+	for leg in _legs:
+		var side: float = leg.side
+		var up := maxf(0.0, sin(beat + (0.0 if side > 0.0 else PI))) # this leg's heel-up share
+		pose[leg.hip] = Quaternion(Vector3.RIGHT, 0.32 * up - 0.16 * (1.0 - up))
+		pose[leg.knee] = Quaternion(Vector3.RIGHT, -0.85 * up)
+	if _spine != -1:
+		pose[_spine] = Quaternion(Vector3.RIGHT, 0.1) * Quaternion(Vector3.BACK, 0.05 * sin(beat))
+	for arm in _arms:
+		var side: float = arm.side
+		var swing := 0.25 * sin(beat + (PI if side > 0.0 else 0.0))
+		pose[arm.shoulder] = Quaternion(Vector3.RIGHT, swing) * (arm.down as Quaternion)
+		if arm.elbow != -1:
+			pose[arm.elbow] = Quaternion(Vector3.BACK, side * 0.35)
+	if _neck != -1:
+		pose[_neck] = Quaternion(Vector3.RIGHT, 0.14 * sin(beat * 2.0))
+	return pose
+
+
+## Party dance: both arms up pumping in turn, hopping with deep knee bounces,
+## a quick hip-and-shoulder shimmy, head bobbing.
+func _party_pose(t: float) -> Dictionary:
+	var pose := {}
+	var beat := t * TAU * 2.5
+	var bounce := (1.0 - cos(beat)) * 0.5
+	for leg in _legs:
+		var side: float = leg.side
+		pose[leg.hip] = Quaternion(Vector3.RIGHT, 0.3 * bounce) * Quaternion(Vector3.BACK, side * 0.08)
+		pose[leg.knee] = Quaternion(Vector3.RIGHT, -0.6 * bounce)
+	if _spine != -1:
+		pose[_spine] = Quaternion(Vector3.UP, 0.3 * sin(beat * 0.5)) * Quaternion(Vector3.BACK, 0.1 * sin(beat))
+	for arm in _arms:
+		var side: float = arm.side
+		var pump := (sin(beat + (0.0 if side > 0.0 else PI)) + 1.0) * 0.5
+		var dir := Vector3(side * lerpf(0.25, 0.5, pump), 1.0, lerpf(-0.35, 0.05, pump)).normalized()
+		pose[arm.shoulder] = Quaternion(arm.dir as Vector3, dir)
+		if arm.elbow != -1:
+			pose[arm.elbow] = Quaternion(Vector3.BACK, side * lerpf(0.9, 0.15, pump))
+	if _neck != -1:
+		pose[_neck] = Quaternion(Vector3.RIGHT, 0.2 * sin(beat))
 	return pose
 
 

@@ -2,22 +2,15 @@ class_name CameraRig
 extends Node3D
 ## Orbit camera for touch and mouse.
 ## One finger (or left mouse) drag: orbit. Two-finger pinch (or wheel): zoom.
-## Press on something grabbable (see `can_grab`) and hold or drag: grab_* signals
-## instead of orbiting. A quick tap still emits `tapped`.
 ## Mouse drags arrive as touch events (input_devices/pointing/emulate_touch_from_mouse).
 
 signal tapped(screen_pos: Vector2)
-signal grab_started(screen_pos: Vector2)
-signal grab_moved(screen_pos: Vector2)
-signal grab_ended(screen_pos: Vector2)
-
-const HOLD_TIME := 0.22 # seconds a finger must rest on a friend to pick them up
 
 const ORBIT_SPEED := 0.006
 const MIN_PITCH := deg_to_rad(-80.0)
 const MAX_PITCH := deg_to_rad(-12.0)
 const MIN_DISTANCE := 3.0
-const MAX_DISTANCE := 48.0
+const MAX_DISTANCE := 28.0
 const TAP_SLOP := 12.0 # pixels a finger may move and still count as a tap
 const MOUSE_INDEX := 1000 # touch slot used for a real mouse in browsers
 
@@ -32,13 +25,6 @@ var _pinch_start_distance := 0.0
 var _pinch_start_zoom := 0.0
 var _was_multi := false
 var _focus := Vector3.ZERO
-var _view_goal := Vector3.ZERO # (yaw, pitch, distance) target for view_from
-var _view_active := false
-## func(screen_pos: Vector2) -> bool: is there something to pick up at this point?
-var can_grab := Callable()
-var _pending_index := -1
-var _pending_time := 0.0
-var _grab_index := -1
 
 
 func _ready() -> void:
@@ -58,8 +44,6 @@ func _unhandled_input(event: InputEvent) -> void:
 		_drag(drag.index, drag.position, drag.relative)
 	elif event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
-		if mb.pressed and (mb.button_index == MOUSE_BUTTON_WHEEL_UP or mb.button_index == MOUSE_BUTTON_WHEEL_DOWN):
-			_view_active = false # mouse-wheel zoom takes over from view_from
 		if mb.pressed and mb.button_index == MOUSE_BUTTON_WHEEL_UP:
 			distance = clampf(distance * 0.9, MIN_DISTANCE, MAX_DISTANCE)
 			_apply()
@@ -84,27 +68,12 @@ func _is_real_web_mouse(event: InputEvent) -> bool:
 
 func _touch(index: int, pressed: bool, pos: Vector2) -> void:
 	if pressed:
-		if _grab_index != -1:
-			return # holding a friend: ignore other fingers
 		_touches[index] = pos
 		_touch_start[index] = pos
-		if _touches.size() == 1 and can_grab.is_valid() and can_grab.call(pos):
-			_pending_index = index # becomes a grab if held or dragged
-			_pending_time = 0.0
-		elif _touches.size() == 2:
-			_pending_index = -1
+		if _touches.size() == 2:
 			_was_multi = true
 			_start_pinch()
 	else:
-		if index == _grab_index:
-			_grab_index = -1
-			_touches.erase(index)
-			_touch_start.erase(index)
-			_was_multi = false
-			grab_ended.emit(pos)
-			return
-		if index == _pending_index:
-			_pending_index = -1
 		var start: Vector2 = _touch_start.get(index, pos)
 		var is_tap := not _was_multi and start.distance_to(pos) < TAP_SLOP
 		_touches.erase(index)
@@ -118,18 +87,7 @@ func _touch(index: int, pressed: bool, pos: Vector2) -> void:
 func _drag(index: int, pos: Vector2, relative: Vector2) -> void:
 	if not _touches.has(index):
 		return
-	if index != _pending_index and index != _grab_index:
-		_view_active = false # the player is steering the camera now
 	_touches[index] = pos
-	if index == _grab_index:
-		grab_moved.emit(pos)
-		return
-	if index == _pending_index:
-		var start: Vector2 = _touch_start.get(index, pos)
-		if start.distance_to(pos) >= TAP_SLOP:
-			_begin_grab()
-			grab_moved.emit(pos)
-		return # small wiggles on a friend shouldn't orbit the camera
 	if _touches.size() == 1:
 		yaw -= relative.x * ORBIT_SPEED
 		pitch = clampf(pitch - relative.y * ORBIT_SPEED, MIN_PITCH, MAX_PITCH)
@@ -153,40 +111,7 @@ func focus_on(point: Vector3) -> void:
 	_focus = point + Vector3(0.0, 1.0, 0.0)
 
 
-## Glide to look at `point` from the direction `facing` (a horizontal vector
-## pointing from the point towards where the camera should stand), e.g. to face
-## the front of a building. Any drag or pinch takes over again.
-func view_from(point: Vector3, facing: Vector3, view_pitch: float, view_distance: float) -> void:
-	focus_on(point)
-	# The camera sits at +Z of the rig, rotated by yaw: Rot_y(yaw) * +Z = (sin, 0, cos).
-	var goal_yaw := atan2(facing.x, facing.z)
-	_view_goal = Vector3(yaw + angle_difference(yaw, goal_yaw), clampf(view_pitch, MIN_PITCH, MAX_PITCH), clampf(view_distance, MIN_DISTANCE, MAX_DISTANCE))
-	_view_active = true
-
-
-func _begin_grab() -> void:
-	_grab_index = _pending_index
-	_pending_index = -1
-	grab_started.emit(_touches.get(_grab_index, Vector2.ZERO))
-
-
-func is_grabbing() -> bool:
-	return _grab_index != -1
-
-
 func _process(delta: float) -> void:
-	if _pending_index != -1:
-		_pending_time += delta
-		if _pending_time >= HOLD_TIME:
-			_begin_grab()
-	if _view_active:
-		var k := 1.0 - exp(-4.0 * delta)
-		yaw = lerpf(yaw, _view_goal.x, k)
-		pitch = lerpf(pitch, _view_goal.y, k)
-		distance = lerpf(distance, _view_goal.z, k)
-		_apply()
-		if absf(yaw - _view_goal.x) < 0.002 and absf(pitch - _view_goal.y) < 0.002 and absf(distance - _view_goal.z) < 0.01:
-			_view_active = false
 	if position.distance_squared_to(_focus) > 0.0001:
 		position = position.lerp(_focus, 1.0 - exp(-5.0 * delta))
 

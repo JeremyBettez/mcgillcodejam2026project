@@ -4,16 +4,29 @@ extends CharacterBody3D
 ## Outer body: position, wandering, collision, name tag, selection ring, drop shadow.
 ## Inner `avatar_root`: the loaded GLB (or a placeholder capsule); only this animates.
 ##
-## States: IDLE -> WALK / ACT (wave, dance) on its own. The player can pick a
+## States: IDLE -> WALK / ACT on its own. When an idle pause ends, a friend
+## sometimes does something social, picked by ACTION_WEIGHTS: wave at the
+## viewer, wave at a nearby friend, dance alone, or dance *with* a nearby friend
+## (the moonwalk or a party dance). With a home they explore its visible sides
+## and front, a different part each walk (Location.explore_point). The player can pick a
 ## friend up (HELD: lifted, follows the finger, dangles like a ragdoll) and let
 ## go (FALLING: drops with gravity, one bounce, then back to IDLE).
 
 enum State { IDLE, WALK, ACT, HELD, FALLING }
 
-const WAVE_TIME := 3.0
-const DANCE_TIME := 5.0
-const SPONTANEOUS_WAVE := 0.12 # chance per idle pause
-const SPONTANEOUS_DANCE := 0.08
+const ACTION_TIME := {"wave": 3.0, "dance": 5.0, "moonwalk": 4.5, "party": 5.0}
+const SOCIAL_CHANCE := 0.35 # chance an idle pause ends in a wave/dance instead of a walk
+## Relative weights of what that social moment is (friend ones need someone near).
+const ACTION_WEIGHTS := {
+	"wave_viewer": 3.0, # turn to the camera and wave
+	"wave_friend": 3.0, # wave at a nearby friend (they wave back)
+	"dance_together": 2.5, # moonwalk or party dance with a nearby friend
+	"dance_solo": 1.0,
+	"moonwalk_solo": 0.6,
+}
+const PARTNER_DISTANCE := 6.0 # how close another friend must be to join in
+const MOONWALK_SPEED := 0.5 # m/s gliding backwards
+const RECENT_SPOTS := 3 # explored sectors remembered, so walks cover the whole area
 const WALK_SPEED := 0.9
 const TURN_SPEED := 6.0
 const ARRIVE_DISTANCE := 0.3
@@ -61,7 +74,9 @@ var status_text := "":
 		status_text = value
 		_update_tag()
 var saved := false # true for residents stored in the player's world (removable)
-var world_radius := 10.0
+var world_radius := 10.0 # edge of the map (thrown friends bounce off it)
+## Friends without a home wander this far from the middle of town.
+var wander_radius := 24.0
 ## Location this friend hangs out at (null = wanders the whole map).
 var home: Location
 
@@ -79,6 +94,7 @@ var _detours := 0
 var _rng := RandomNumberGenerator.new()
 var _face_point: Variant = null # Vector3 to turn toward while performing
 var _act_time := 0.0
+var _recent_sectors: Array[int] = []
 
 var _collider: CollisionShape3D
 var _shadow: MeshInstance3D
@@ -386,16 +402,15 @@ func _ground_physics(delta: float) -> void:
 		State.IDLE:
 			velocity = Vector3.ZERO
 			if _state_time <= 0.0:
-				# Now and then a friend waves or dances on their own.
-				var roll := _rng.randf()
-				if roll < SPONTANEOUS_WAVE:
-					perform("wave")
-				elif roll < SPONTANEOUS_WAVE + SPONTANEOUS_DANCE:
-					perform("dance")
+				if _rng.randf() < SOCIAL_CHANCE:
+					_social_moment()
 				else:
 					_enter_walk()
 		State.ACT:
 			velocity = Vector3.ZERO
+			if _gait.action == "moonwalk":
+				# Glide backwards (the body faces -Z, so back is +Z).
+				velocity = global_transform.basis.z * MOONWALK_SPEED * _gait.action_weight
 			if _face_point is Vector3:
 				var to_face: Vector3 = (_face_point as Vector3) - global_position
 				if Vector2(to_face.x, to_face.z).length() > 0.1:
@@ -469,11 +484,12 @@ func _update_swing(delta: float) -> void:
 	_swing = (_swing + _swing_vel * delta).clamp(Vector2(-SWING_MAX, -SWING_MAX), Vector2(SWING_MAX, SWING_MAX))
 
 
-## Play "wave" or "dance". If `face_point` is a Vector3 (e.g. the camera), turn toward it.
+## Play an action (see ProceduralGait.ACTIONS). If `face_point` is a Vector3
+## (e.g. the camera or another friend), turn toward it.
 func perform(action: String, face_point: Variant = null) -> void:
 	if action not in ProceduralGait.ACTIONS or is_held():
 		return
-	var duration := WAVE_TIME if action == "wave" else DANCE_TIME
+	var duration: float = ACTION_TIME.get(action, 4.0)
 	_gait.play(action, duration)
 	_state = State.ACT
 	_state_time = duration + 0.3 # let the pose blend out before walking on
@@ -483,6 +499,80 @@ func perform(action: String, face_point: Variant = null) -> void:
 
 func is_performing() -> bool:
 	return _state == State.ACT
+
+
+## Free to join in: standing around or strolling, not busy, held or flying.
+func is_available() -> bool:
+	return _state == State.IDLE or _state == State.WALK
+
+
+## Pick a wave/dance by ACTION_WEIGHTS (friend ones only if someone is close).
+func _social_moment() -> void:
+	var partner := nearby_friend()
+	var options := {}
+	for key: String in ACTION_WEIGHTS:
+		if key.ends_with("_friend") or key.ends_with("_together"):
+			if partner == null:
+				continue
+		options[key] = ACTION_WEIGHTS[key]
+	var total := 0.0
+	for key: String in options:
+		total += options[key]
+	var roll := _rng.randf() * total
+	var choice := ""
+	for key: String in options:
+		roll -= options[key]
+		choice = key
+		if roll <= 0.0:
+			break
+	match choice:
+		"wave_viewer":
+			perform("wave", _camera_point())
+		"wave_friend":
+			perform("wave", partner.global_position)
+			partner.perform("wave", global_position) # they wave back
+		"dance_together":
+			if _rng.randf() < 0.5:
+				# Side by side, both moonwalking for the camera.
+				perform("moonwalk", _camera_point())
+				partner.perform("moonwalk", _camera_point())
+			else:
+				# Face each other and party.
+				perform("party", partner.global_position)
+				partner.perform("party", global_position)
+		"dance_solo":
+			perform("dance", _camera_point())
+		"moonwalk_solo":
+			perform("moonwalk", _camera_point())
+		_:
+			_enter_walk()
+
+
+## The closest other friend within PARTNER_DISTANCE who is free, or null.
+func nearby_friend() -> Resident:
+	var best: Resident = null
+	var best_d := PARTNER_DISTANCE
+	if get_parent() == null:
+		return null
+	for other in get_parent().get_children():
+		if other == self or not other is Resident:
+			continue
+		var friend := other as Resident
+		if not friend.is_available():
+			continue
+		var d := global_position.distance_to(friend.global_position)
+		if d < best_d:
+			best_d = d
+			best = friend
+	return best
+
+
+## Where the viewer is (the active camera), at ground level.
+func _camera_point() -> Variant:
+	var cam := get_viewport().get_camera_3d() if is_inside_tree() else null
+	if cam == null:
+		return null
+	return Vector3(cam.global_position.x, 0.0, cam.global_position.z)
 
 
 func _process(delta: float) -> void:
@@ -509,11 +599,11 @@ func _process(delta: float) -> void:
 		# rock side to side for a wave, hop and spin for a dance.
 		_act_time += delta
 		var w := _gait.action_weight
-		var rock := sin(_act_time * 10.0) * 0.15 * w if _gait.action == "wave" else 0.0
-		var spin := _act_time * TAU * 0.5 * w if _gait.action == "dance" else 0.0
+		var rock := sin(_act_time * 10.0) * 0.15 * w if _gait.action in ["wave", "moonwalk"] else 0.0
+		var spin := _act_time * TAU * 0.5 * w if _gait.action in ["dance", "party"] else 0.0
 		body_basis = Basis.from_euler(Vector3(0.0, spin, sin(_gait.phase) * 0.08 * _gait.amount + rock))
 		offset.y = absf(sin(_gait.phase)) * 0.05 * _gait.amount
-		if _gait.action == "dance":
+		if _gait.action in ["dance", "party"]:
 			offset.y += absf(sin(_act_time * TAU * 2.0)) * 0.12 * w
 	if _dangle > 0.001:
 		# Whole body swings from a pivot at the top of the head.
@@ -563,12 +653,17 @@ func _enter_walk() -> void:
 	_resume_target = null
 	_detours = 0
 	if home and is_instance_valid(home):
-		# Hang out around their location (and head back there if thrown away).
-		_target = home.random_point(_rng)
+		# Hang out around their location (and head back there if thrown away),
+		# exploring a part of it they haven't been to lately.
+		var spot := home.explore_point(_rng, _recent_sectors)
+		_target = spot.point
+		_recent_sectors.append(spot.sector)
+		if _recent_sectors.size() > RECENT_SPOTS:
+			_recent_sectors.pop_front()
 		var far := not home.contains(global_position)
 		_state_time = 60.0 if far else 12.0 # give up if it takes too long
 		return
 	var angle := _rng.randf() * TAU
-	var dist := sqrt(_rng.randf()) * world_radius
+	var dist := sqrt(_rng.randf()) * minf(wander_radius, world_radius)
 	_target = Vector3(cos(angle) * dist, 0.0, sin(angle) * dist)
 	_state_time = 12.0 # give up if it takes too long

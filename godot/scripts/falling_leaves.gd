@@ -11,8 +11,16 @@ const COLORS: Array[Color] = [
 	Color(0.66, 0.20, 0.24), Color(0.93, 0.56, 0.20),
 ]
 
+const BREEZE := Vector3(0.25, -0.55, 0.1) # gentle drift when the view is still
+const GUST_PUSH := 0.9 # how strongly a fast-moving view drags the leaves along
+const GUST_LIFT := 0.12 # ...and swirls them up
+const MAX_GUST := 9.0
+
 ## The emitter follows this node's XZ position (the camera rig's focus point).
+## If it has a `velocity` (CameraRig), fast pans and flicks stir the leaves up.
 var follow: Node3D
+
+var _gust := Vector3.ZERO
 
 
 func _init() -> void:
@@ -27,7 +35,7 @@ func _init() -> void:
 	spread = 60.0
 	initial_velocity_min = 0.2
 	initial_velocity_max = 0.7
-	gravity = Vector3(0.25, -0.55, 0.1) # a gentle breeze
+	gravity = BREEZE
 	damping_min = 0.05
 	damping_max = 0.15
 	angle_min = 0.0
@@ -63,9 +71,20 @@ func _init() -> void:
 	mesh = quad
 
 
-func _process(_delta: float) -> void:
-	if follow:
-		global_position = Vector3(follow.global_position.x, TOP, follow.global_position.z)
+func _process(delta: float) -> void:
+	if not follow:
+		return
+	global_position = Vector3(follow.global_position.x, TOP, follow.global_position.z)
+	# Wind from the camera: leaves get swept along behind a quick pan and tumble
+	# faster, then settle back to the breeze when the view stops.
+	var view_velocity: Vector3 = follow.get("velocity") if follow.get("velocity") is Vector3 else Vector3.ZERO
+	var flat := Vector3(view_velocity.x, 0.0, view_velocity.z)
+	var goal := flat * GUST_PUSH + Vector3.UP * flat.length() * GUST_LIFT
+	# Gusts build quickly and die down slowly.
+	var rate := 6.0 if goal.length() > _gust.length() else 1.2
+	_gust = _gust.lerp(goal.limit_length(MAX_GUST), 1.0 - exp(-rate * delta))
+	gravity = BREEZE + _gust
+	speed_scale = 1.0 + minf(_gust.length() * 0.08, 0.8)
 
 
 ## A simple pointed leaf with a stem and a pale vein, white so particle colours tint it.

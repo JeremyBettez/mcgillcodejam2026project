@@ -25,7 +25,10 @@ var hangout_radius := 6.0
 var footprint := Rect2(Vector2(-1.0, -1.0), Vector2(2.0, 2.0))
 ## Camera distance when flying here from the Locations list (0 = fit the footprint).
 var view_distance := 0.0
-var user_added := false # added by the player (saved, removable)
+var user_added := false
+## Where it sits in the town: District id and lot index (see District).
+var district_id := ""
+var lot := -1 # added by the player (saved, removable)
 var flag_design: Variant = null # null, "mcgill", or {"colors": [field, accent]}
 ## Second line on the name sign, e.g. "building 3D..." while generating.
 var status_text := "":
@@ -161,6 +164,38 @@ func random_point(rng: RandomNumberGenerator) -> Vector3:
 			return to_global(Vector3(local.x, 0.0, local.y))
 	# Fallback: straight out in front of the building.
 	return to_global(Vector3(0.0, 0.0, footprint.end.y + 1.5))
+
+
+## Parts of the hangout area friends explore: sectors around the building's
+## sides and front (local angle atan2(z, x); front = +Z = 90 deg). The back
+## is left out, since the fixed camera can't see behind a building.
+const EXPLORE_FROM := deg_to_rad(-25.0)
+const EXPLORE_TO := deg_to_rad(205.0)
+const EXPLORE_SECTORS := 6
+
+
+## A spot to walk to, in the sector visited least among `recent` (ties at
+## random), outside the building. Returns {"point": Vector3 (world), "sector": int}.
+func explore_point(rng: RandomNumberGenerator, recent: Array[int]) -> Dictionary:
+	var best: Array[int] = []
+	var fewest := 1 << 30
+	for sector in EXPLORE_SECTORS:
+		var visits := recent.count(sector)
+		if visits < fewest:
+			fewest = visits
+			best = [sector]
+		elif visits == fewest:
+			best.append(sector)
+	var sector: int = best[rng.randi() % best.size()]
+	var width := (EXPLORE_TO - EXPLORE_FROM) / EXPLORE_SECTORS
+	var grown := footprint.grow(0.8)
+	for attempt in 16:
+		var angle := EXPLORE_FROM + width * (sector + rng.randf())
+		var dist := lerpf(hangout_radius * 0.35, hangout_radius * 0.95, sqrt(rng.randf()))
+		var local := Vector2(cos(angle), sin(angle)) * dist
+		if not grown.has_point(local):
+			return {"point": to_global(Vector3(local.x, 0.0, local.y)), "sector": sector}
+	return {"point": random_point(rng), "sector": sector}
 
 
 ## True if a world point is inside this location's hangout area.
