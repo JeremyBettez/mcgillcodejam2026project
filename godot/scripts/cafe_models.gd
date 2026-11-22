@@ -1,7 +1,8 @@
 class_name CafeModels
 extends RefCounted
 ## Low-poly downtown storefronts built in code: a Starbucks-style café and a
-## McDonald's-style restaurant. Brand colours and a name sign only (no logos).
+## McDonald's-style restaurant, with brand colours, name signs and simple
+## emblems drawn in code (BrandLogos: golden arches, a round green badge).
 ## Both face +Z.
 
 const STARBUCKS_FOOTPRINT := Rect2(Vector2(-3.3, -2.4), Vector2(6.6, 4.4))
@@ -27,11 +28,13 @@ static func starbucks() -> Node3D:
 	# Green awning tilted out over the windows.
 	var awning := kit.box(green, Vector3(6.6, 0.08, 1.1), Vector3(0, 1.75, 2.35))
 	awning.rotation.x = deg_to_rad(18.0)
-	# Sign band with the name, and a plain round green badge.
+	# Sign band with the name, the round badge beside it, and a big badge up
+	# on the cornice.
 	kit.box(green, Vector3(3.2, 0.5, 0.08), Vector3(-0.8, 2.05, 1.98))
 	_label(kit, "Starbucks", Vector3(-0.8, 2.05, 2.04), Color.WHITE, 0.0042)
-	kit.cylinder(Color.WHITE, 0.42, 0.06, Vector3(1.9, 2.05, 1.99), 20).rotation.x = PI * 0.5
-	kit.cylinder(green, 0.34, 0.07, Vector3(1.9, 2.05, 2.0), 20).rotation.x = PI * 0.5
+	_logo(kit, "starbucks", 0.8, Vector3(1.9, 2.05, 2.0))
+	kit.box(cream, Vector3(1.5, 1.5, 0.12), Vector3(0, 4.25, 1.75)) # plaque on the roofline
+	_logo(kit, "starbucks", 1.3, Vector3(0, 4.25, 1.82))
 	# Patio: tables with green umbrellas.
 	for x in [-2.0, 2.2]:
 		kit.cylinder(DOOR, 0.35, 0.05, Vector3(x, 0.72, 3.4), 10)
@@ -71,15 +74,24 @@ static func mcdonalds() -> Node3D:
 	kit.box(DOOR, Vector3(0.9, 1.6, 0.05), Vector3(0.45, 1.0, 1.92))
 	kit.box(red.darkened(0.2), Vector3(3.6, 0.45, 0.08), Vector3(0, 2.35, 1.95))
 	_label(kit, "McDonald's", Vector3(0, 2.35, 2.01), yellow, 0.0042)
-	# Tall roadside sign: pole with a yellow board.
+	# Golden arches standing on the roof.
+	_logo(kit, "arches", 2.2, Vector3(0, 4.35, 1.2))
+	# Tall roadside sign: pole with a red board, the arches and the name.
 	kit.cylinder(Color(0.75, 0.75, 0.78), 0.1, 4.6, Vector3(-4.4, 2.3, 1.6), 8)
-	kit.box(yellow, Vector3(1.9, 1.0, 0.18), Vector3(-4.4, 4.7, 1.6))
-	_label(kit, "McDonald's", Vector3(-4.4, 4.7, 1.7), red, 0.0036)
+	kit.box(red, Vector3(1.9, 1.5, 0.18), Vector3(-4.4, 4.95, 1.6))
+	_logo(kit, "arches", 1.4, Vector3(-4.4, 5.15, 1.7))
+	_label(kit, "McDonald's", Vector3(-4.4, 4.45, 1.7), Color.WHITE, 0.0034)
 	# Drive-through lane on the side.
 	kit.box(Color(0.35, 0.35, 0.38), Vector3(1.8, 0.02, 6.0), Vector3(4.6, 0.01, 0.6))
 	kit.box(yellow, Vector3(0.1, 0.02, 6.0), Vector3(4.6, 0.02, 0.6))
 	kit.walls(MCDONALDS_FOOTPRINT, 3.0)
 	return kit.root
+
+
+static func _logo(kit: ModelKit, logo: String, width: float, at: Vector3) -> void:
+	var quad := BrandLogos.quad(logo, width)
+	quad.position = at
+	kit.root.add_child(quad)
 
 
 static func _label(kit: ModelKit, text: String, at: Vector3, color: Color, pixel: float) -> void:
