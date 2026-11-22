@@ -19,6 +19,9 @@ const ARM_SWING := 0.4
 const ARM_OUT := 0.22 # how far the lowered arms stay away from the body (x per unit down)
 const BLEND_RATE := 4.0 # how fast actions fade in/out (per second)
 const ACTIONS := ["wave", "dance"]
+const LIMB_SPRING := 40.0 # ragdoll limb stiffness
+const LIMB_DAMP := 5.0 # ragdoll limb damping (lower = floppier)
+const LIMB_KICK := 6.0 # how hard a bounce jolts the limbs
 
 var ok := false
 var skeleton: Skeleton3D
@@ -30,10 +33,12 @@ var action_weight := 0.0 # 0..1 blend of the action over the walk/idle pose
 var dangle_weight := 0.0 # 0..1 blend of the dangle pose over everything else
 var swing := Vector2.ZERO # body swing (x = pitch fwd/back, y = roll sideways), radians
 var struggle := 0.0 # 0..1 how much the limbs flail
+var tumble_rate := 0.0 # body spin (rad/s) while thrown: flings arms out, tucks legs
 
 var _action_time := 0.0
 var _action_left := 0.0
-var _dangle_time := 0.0
+var _limbs := {} # ragdoll limb springs, created on demand
+var _rng := RandomNumberGenerator.new()
 var _legs: Array[Dictionary] = [] # {hip, knee, side}
 var _arms: Array[Dictionary] = [] # {shoulder, elbow, side, dir, down}; [0] is the right arm
 var _spine := -1
@@ -71,7 +76,8 @@ func setup(sk: Skeleton3D) -> bool:
 		for c in leg_roots.slice(0, 2):
 			var chain := _chain_to_lowest(c)
 			if chain.size() >= 2:
-				legs.append({"hip": chain[0], "knee": chain[1], "side": _side_of(chain[-1], height)})
+				legs.append({"hip": chain[0], "knee": chain[1], "side": _side_of(chain[-1], height),
+					"dir": (_pos(chain[-1]) - _pos(chain[0])).normalized()})
 		if legs.size() == 2 and legs[0].side != legs[1].side and legs[0].side != 0.0 and legs[1].side != 0.0:
 			_legs = legs
 
@@ -189,8 +195,7 @@ func apply(delta: float, walking: bool) -> float:
 			act_bob = -0.05 * (1.0 - cos(_action_time * TAU * 2.0)) * 0.5
 	var dangle := {}
 	if dangle_weight > 0.0:
-		_dangle_time += delta
-		dangle = _dangle_pose(_dangle_time)
+		dangle = _ragdoll_pose(delta)
 	for bone in _managed:
 		var from: Quaternion = walk.get(bone, Quaternion.IDENTITY)
 		var to: Quaternion = act.get(bone, Quaternion.IDENTITY)
@@ -262,27 +267,72 @@ func _dance_pose(t: float) -> Dictionary:
 	return pose
 
 
-## Picked up and dangling: legs hang and kick, arms flail out, head flops, and
-## every limb lags behind the body's swing like a ragdoll.
-func _dangle_pose(t: float) -> Dictionary:
+## Jolt every limb (e.g. hitting the ground). `strength` ~ 0..1.
+func impulse(strength: float) -> void:
+	for key in _limbs:
+		var limb: Dictionary = _limbs[key]
+		limb.v += Vector2(_rng.randf_range(-1.0, 1.0), _rng.randf_range(-1.0, 1.0)) * strength * LIMB_KICK
+		limb.bv += _rng.randf_range(0.2, 1.0) * strength * LIMB_KICK * 0.6
+
+
+## One springy limb: an angle pair (a.x = swing forward/back, a.y = raise/lower)
+## chasing a randomly changing target, plus a bend amount for elbow/knee.
+func _limb(key: String, delta: float, amount: float, rate: float, bias := Vector2.ZERO) -> Dictionary:
+	if not _limbs.has(key):
+		_limbs[key] = {"a": Vector2.ZERO, "v": Vector2.ZERO, "t": Vector2.ZERO, "bend": 0.3, "bv": 0.0, "bt": 0.3, "timer": 0.0}
+	var limb: Dictionary = _limbs[key]
+	limb.timer -= delta
+	if limb.timer <= 0.0:
+		# New random flail target; faster re-targeting = more frantic flailing.
+		limb.timer = _rng.randf_range(0.25, 0.6) / maxf(rate, 0.1)
+		limb.t = Vector2(_rng.randf_range(-1.0, 1.0), _rng.randf_range(-1.0, 1.0)) * amount
+		limb.bt = _rng.randf_range(0.0, 1.0) * amount
+	var target: Vector2 = limb.t + bias
+	limb.v += ((target - limb.a) * LIMB_SPRING - limb.v * LIMB_DAMP) * delta
+	limb.a = (limb.a + limb.v * delta).clamp(Vector2(-1.8, -1.8), Vector2(1.8, 1.8))
+	limb.bv += ((limb.bt - limb.bend) * LIMB_SPRING * 0.8 - limb.bv * LIMB_DAMP) * delta
+	limb.bend = clampf(limb.bend + limb.bv * delta, 0.0, 1.4)
+	return limb
+
+
+## Ragdoll while held, thrown or skidding: every limb is a damped spring that
+## flails toward random targets (arms windmill, legs kick), spinning flings the
+## arms out and tucks the legs/torso in, bounces jolt everything (see impulse),
+## and the whole lot lags behind the body's pendulum swing.
+func _ragdoll_pose(delta: float) -> Dictionary:
 	var pose := {}
 	var lag := Quaternion(Vector3.RIGHT, -swing.x) * Quaternion(Vector3.BACK, -swing.y)
-	for leg in _legs:
-		var side: float = leg.side
-		var kick := sin(t * 9.0 + (0.0 if side > 0.0 else PI)) * 0.3 * struggle
-		pose[leg.hip] = lag * Quaternion(Vector3.RIGHT, -swing.x * 0.4 + kick) * Quaternion(Vector3.BACK, side * 0.12)
-		pose[leg.knee] = Quaternion(Vector3.RIGHT, -0.3 - 0.25 * absf(sin(t * 9.0)) * struggle)
+	var fling := clampf(absf(tumble_rate) / 8.0, 0.0, 1.0) # how hard the spin throws limbs out
+	var amount := clampf(struggle, 0.0, 1.0)
+	var rate := 0.6 + 2.4 * amount
 	for arm in _arms:
 		var side: float = arm.side
-		var flap := sin(t * 7.0 + side) * 0.3 * struggle
-		var dir := Vector3(side * 0.9, 0.35 + flap, -0.2).normalized()
-		pose[arm.shoulder] = lag * Quaternion(arm.dir as Vector3, dir)
+		# Arms ride higher when held/struggling and fly out when spinning.
+		var raise := lerpf(-0.6, 0.35, amount) + 0.7 * fling
+		var limb := _limb("arm%d" % int(side), delta, 1.1 * amount + 0.25, rate, Vector2(0.0, raise))
+		var a: Vector2 = limb.a
+		var base := Vector3(side, 0.0, 0.0)
+		var dir := Basis(Vector3.RIGHT, a.x) * Basis(Vector3.BACK, a.y * side) * base
+		pose[arm.shoulder] = lag * Quaternion(arm.dir as Vector3, dir.normalized())
 		if arm.elbow != -1:
-			pose[arm.elbow] = Quaternion(Vector3.BACK, side * (0.4 + 0.3 * sin(t * 7.0)))
+			pose[arm.elbow] = Quaternion(Vector3.UP, side * 1.3 * float(limb.bend))
+	for leg in _legs:
+		var side: float = leg.side
+		var tuck := 0.9 * fling # knees come up during flips
+		var limb := _limb("leg%d" % int(side), delta, 0.8 * amount + 0.2, rate, Vector2(tuck, 0.0))
+		var a: Vector2 = limb.a
+		var base := Vector3(side * 0.15, -1.0, 0.0).normalized()
+		var dir := Basis(Vector3.RIGHT, a.x) * Basis(Vector3.BACK, a.y * 0.5 * side) * base
+		pose[leg.hip] = lag * Quaternion(leg.dir as Vector3, dir.normalized())
+		pose[leg.knee] = Quaternion(Vector3.RIGHT, -(0.15 + 1.2 * float(limb.bend) + 0.6 * fling))
+	var torso := _limb("torso", delta, 0.35 * amount + 0.1, rate * 0.7, Vector2(0.5 * fling, 0.0))
+	var t: Vector2 = torso.a
 	if _spine != -1:
-		pose[_spine] = Quaternion(Vector3.RIGHT, -swing.x * 0.4) * Quaternion(Vector3.BACK, -swing.y * 0.4)
+		pose[_spine] = Quaternion(Vector3.RIGHT, t.x - swing.x * 0.4) * Quaternion(Vector3.BACK, t.y * 0.5 - swing.y * 0.4)
 	if _neck != -1:
-		pose[_neck] = Quaternion(Vector3.RIGHT, 0.25) * Quaternion(Vector3.BACK, -swing.y * 0.8)
+		var head := _limb("head", delta, 0.5 * amount + 0.2, rate, Vector2(0.25, 0.0))
+		var h: Vector2 = head.a
+		pose[_neck] = Quaternion(Vector3.RIGHT, h.x) * Quaternion(Vector3.BACK, h.y * 0.6 - swing.y * 0.8)
 	return pose
 
 

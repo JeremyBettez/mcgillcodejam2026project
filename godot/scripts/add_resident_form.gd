@@ -11,6 +11,7 @@ const NAME_PLACEHOLDER := "Tap to enter their name"
 var bridge: PhotoBridge
 
 var _jpeg := PackedByteArray()
+var _card: PanelContainer
 var _preview: TextureRect
 var _preview_hint: Label
 var _name_edit: LineEdit # holds the name on every platform (hidden on web)
@@ -35,6 +36,7 @@ func _ready() -> void:
 	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(center)
 	var card := PanelContainer.new()
+	_card = card
 	card.custom_minimum_size = Vector2(500.0, 0.0)
 	var card_style := StyleBoxFlat.new()
 	card_style.bg_color = Color(0.13, 0.15, 0.19)
@@ -117,6 +119,7 @@ func _ready() -> void:
 func open() -> void:
 	_reset()
 	visible = true
+	UiFx.pop_in(_card, 0.0, 0.8)
 
 
 func close() -> void:
@@ -199,5 +202,6 @@ func _button(text: String, parent: Control) -> Button:
 	button.custom_minimum_size = Vector2(0.0, 56.0)
 	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	button.add_theme_font_size_override("font_size", 20)
+	UiFx.add_press_bounce(button)
 	parent.add_child(button)
 	return button

@@ -45,6 +45,7 @@ var _storage_warned := false
 var _dragged: Resident # friend currently held by the player's finger
 var _grab_candidate: Resident # friend under the finger when it touched down
 var _following: Resident # thrown friend the camera follows until they land
+var _last_status := ""
 
 
 func _ready() -> void:
@@ -182,6 +183,7 @@ func _build_bottom_bar() -> void:
 	add_button.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	add_button.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	add_button.pressed.connect(_open_add_form)
+	add_button.pulse = true # gentle ring that invites you to add a friend
 	layer.add_child(add_button)
 
 	add_form = AddResidentForm.new()
@@ -192,8 +194,13 @@ func _build_bottom_bar() -> void:
 
 ## Hide the floating buttons while a full-screen panel (form, list) is open.
 func _set_world_ui(on: bool) -> void:
+	var i := 0
 	for control: Control in [add_button, friends_button, pause_button]:
+		var was_visible := control.visible
 		control.visible = on
+		if on and not was_visible:
+			UiFx.pop_in(control, 0.05 * i, 0.6) # buttons bounce back in, one after another
+			i += 1
 	camera_rig.set_process_unhandled_input(on) # drags on panels must not orbit
 
 
@@ -260,14 +267,24 @@ func _open_friends_sheet() -> void:
 		row.custom_minimum_size = Vector2(0.0, 56.0)
 		row.add_theme_font_size_override("font_size", 20)
 		row.pressed.connect(_on_friend_row.bind(friend))
+		UiFx.add_press_bounce(row)
 		friends_rows.add_child(row)
+	friends_sheet.modulate.a = 0.0 # hidden until laid out, then slides up
 	friends_sheet.visible = true
 	_set_world_ui(false)
+	await get_tree().process_frame
+	if not friends_sheet.visible:
+		return
+	UiFx.slide_up(friends_sheet, 160.0)
+	var i := 0
+	for row in friends_rows.get_children():
+		if row is Control and not row.is_queued_for_deletion():
+			UiFx.pop_in(row, 0.08 + 0.05 * i, 0.9)
+			i += 1
 
 
 func _close_friends_sheet() -> void:
-	friends_sheet.visible = false
-	_set_world_ui(true)
+	UiFx.slide_down(friends_sheet, func() -> void: _set_world_ui(true), 160.0)
 
 
 func _on_friend_row(friend: Resident) -> void:
@@ -329,9 +346,11 @@ func _show_actions(text: String, buttons: Array) -> Array[Button]:
 		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		button.add_theme_font_size_override("font_size", 20)
 		button.pressed.connect(spec[1])
+		UiFx.add_press_bounce(button)
 		action_row.add_child(button)
 		made.append(button)
 	action_bar.visible = true
+	UiFx.pop_in(action_bar, 0.0, 0.9)
 	return made
 
 
@@ -576,15 +595,6 @@ func _on_grab_started(screen_pos: Vector2) -> void:
 	hud_status.text = "Wheee! Move %s around and let go to drop them." % friend.display_name
 
 
-func _process(_delta: float) -> void:
-	if _following:
-		if is_instance_valid(_following) and _following.is_held():
-			var p := _following.global_position
-			camera_rig.focus_on(Vector3(p.x, 0.0, p.z))
-		else:
-			_following = null
-
-
 func _on_grab_moved(screen_pos: Vector2) -> void:
 	if _dragged and is_instance_valid(_dragged):
 		var point: Variant = _ground_point(screen_pos)
@@ -604,6 +614,19 @@ func _on_grab_ended(_screen_pos: Vector2) -> void:
 		else:
 			hud_status.text = "You dropped %s." % _dragged.display_name
 	_dragged = null
+
+
+func _process(_delta: float) -> void:
+	# Animate the status line whenever its message changes.
+	if hud_status.text != _last_status:
+		_last_status = hud_status.text
+		UiFx.text_in(hud_status)
+	if _following:
+		if is_instance_valid(_following) and _following.is_held():
+			var p := _following.global_position
+			camera_rig.focus_on(Vector3(p.x, 0.0, p.z))
+		else:
+			_following = null
 
 
 ## Highlight a resident (or none) and show what can be done with it.

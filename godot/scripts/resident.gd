@@ -303,6 +303,7 @@ func _air_step(delta: float) -> void:
 			v.x *= BOUNCE_FRICTION
 			v.z *= BOUNCE_FRICTION
 			_tumble_speed *= BOUNCE_SPIN_KEEP
+			_gait.impulse(clampf(impact / 8.0, 0.2, 1.0)) # limbs flop on impact
 			_squash = maxf(_squash, clampf(impact / 8.0, 0.35, 1.0))
 			grounded = false
 		else:
@@ -455,7 +456,14 @@ func _process(delta: float) -> void:
 	_update_swing(delta)
 	_gait.dangle_weight = _dangle
 	_gait.swing = _swing * _dangle
-	_gait.struggle = 1.0 if _state == State.HELD else 0.4
+	# Limb flailing: frantic while held, wild in flight, just twitching while skidding.
+	if _state == State.HELD:
+		_gait.struggle = 1.0
+	elif _state == State.FALLING:
+		_gait.struggle = 0.75 if global_position.y > 0.02 else 0.2
+	else:
+		_gait.struggle = 0.2
+	_gait.tumble_rate = _tumble_speed
 	var bob := _gait.apply(delta, _state == State.WALK)
 	var offset := Vector3(0.0, bob, 0.0)
 	var body_basis := Basis.IDENTITY
