@@ -1,0 +1,18 @@
+# Photos of real people and their renders never go into git
+photos/
+renders/
+
+# Local secrets (HF_TOKEN)
+.env.local
+
+# Dependencies and build output
+node_modules/
+dist/
+
+# Godot cache and web export output
+godot/.godot/
+godot/build/
+godot/addons/yhde/bin/~*
+
+# Real person's demo model: kept local, never committed
+godot/demo/*.glb
