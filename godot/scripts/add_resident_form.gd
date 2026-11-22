@@ -1,12 +1,19 @@
 class_name AddResidentForm
 extends Control
-## "Add a friend" card: photo (camera or library), name, Generate.
+## "Add a friend" / "Add a location" card: photo (camera or library), name,
+## (for places) an optional flag, Generate. `open("friend")` or `open("place")`.
 ## The photo stays in memory only; it is handed out with `submitted` and then dropped.
 
 signal submitted(display_name: String, jpeg: PackedByteArray)
 signal closed
 
-const NAME_PLACEHOLDER := "Tap to enter their name"
+const TEXTS := {
+	"friend": {"heading": "Add a friend", "tip": "Full body in the photo: head to feet, facing the camera, arms a little away from the body.", "placeholder": "Their name", "button": "Tap to enter their name", "prompt": "Their name"},
+	"place": {"heading": "Add a location", "tip": "Photo of the building or place from the front, with the whole thing in view.", "placeholder": "Place name", "button": "Tap to enter the place's name", "prompt": "Place name"},
+}
+
+## "friend" or "place" (read by whoever handles `submitted`).
+var mode := "friend"
 
 var bridge: PhotoBridge
 
@@ -20,6 +27,9 @@ var _status: Label
 var _generate: Button
 var _camera_button: Button
 var _library_button: Button
+var _heading: Label
+var _tip: Label
+var _flag_check: CheckBox
 
 
 func _ready() -> void:
@@ -45,12 +55,12 @@ func _ready() -> void:
 	box.add_theme_constant_override("separation", 12)
 	card.add_child(box)
 
-	var heading := _label("Add a friend", 28)
-	heading.add_theme_font_override("font", UiStyle.bold())
-	box.add_child(heading)
-	var tip := _label("Full body in the photo: head to feet, facing the camera, arms a little away from the body.", 16)
-	tip.add_theme_color_override("font_color", UiStyle.BROWN_SOFT)
-	box.add_child(tip)
+	_heading = _label("", 28)
+	_heading.add_theme_font_override("font", UiStyle.bold())
+	box.add_child(_heading)
+	_tip = _label("", 16)
+	_tip.add_theme_color_override("font_color", UiStyle.BROWN_SOFT)
+	box.add_child(_tip)
 
 	var preview_frame := PanelContainer.new()
 	var frame_style := StyleBoxFlat.new()
@@ -89,13 +99,20 @@ func _ready() -> void:
 	_name_edit.add_theme_font_size_override("font_size", 20)
 	_name_edit.text_changed.connect(func(_t: String) -> void: _refresh())
 	box.add_child(_name_edit)
-	_name_button = _button(NAME_PLACEHOLDER, box)
+	_name_button = _button("", box)
 	_name_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	_name_button.pressed.connect(_on_name_button)
 	var on_web := OS.has_feature("web")
 	_name_edit.visible = not on_web
 	_name_button.visible = on_web
 
+
+	# Places only: fly a flag (its known flag, or one in colours from the photo).
+	_flag_check = CheckBox.new()
+	_flag_check.text = "Add a flag in its colors"
+	_flag_check.focus_mode = Control.FOCUS_NONE
+	_flag_check.add_theme_font_size_override("font_size", 18)
+	box.add_child(_flag_check)
 
 	_status = _label("", 16)
 	_status.add_theme_color_override("font_color", Color(0.85, 0.3, 0.25))
@@ -123,7 +140,14 @@ func _ready() -> void:
 	_refresh()
 
 
-func open() -> void:
+func open(form_mode := "friend") -> void:
+	mode = form_mode if TEXTS.has(form_mode) else "friend"
+	var t: Dictionary = TEXTS[mode]
+	_heading.text = t.heading
+	_tip.text = t.tip
+	_name_edit.placeholder_text = t.placeholder
+	_flag_check.visible = mode == "place"
+	_flag_check.button_pressed = false
 	_reset()
 	visible = true
 	UiFx.pop_in(_card, 0.0, 0.8)
@@ -165,14 +189,20 @@ func _on_photo_failed(message: String) -> void:
 
 
 func _on_name_button() -> void:
-	var value: Variant = bridge.ask_name(_name_edit.text)
+	var value: Variant = bridge.ask_name(_name_edit.text, str(TEXTS[mode].prompt))
 	if value is String:
 		_set_name(value)
 
 
 func _set_name(value: String) -> void:
 	_name_edit.text = value
-	_name_button.text = value if not value.is_empty() else NAME_PLACEHOLDER
+	_name_button.text = value if not value.is_empty() else str(TEXTS[mode].button)
+	# A place with a known flag (e.g. McGill) gets it ticked automatically.
+	if mode == "place":
+		var known := Flag.design_for_name(value) != null
+		_flag_check.text = "Add its flag" if known else "Add a flag in its colors"
+		if known:
+			_flag_check.button_pressed = true
 	_refresh()
 
 
@@ -183,6 +213,11 @@ func _on_generate() -> void:
 	var jpeg := _jpeg
 	submitted.emit(display_name, jpeg)
 	close()
+
+
+## For places: whether to fly a flag.
+func wants_flag() -> bool:
+	return mode == "place" and _flag_check.button_pressed
 
 
 func _refresh() -> void:

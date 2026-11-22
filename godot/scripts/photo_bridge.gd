@@ -40,10 +40,10 @@ func pick(source: String) -> void:
 
 ## Asks for a name with the browser's prompt on web. Returns null if cancelled
 ## or if not on web (callers then use the LineEdit text as typed).
-func ask_name(current: String) -> Variant:
+func ask_name(current: String, label := "Their name") -> Variant:
 	if _js == null:
 		return null
-	var value: Variant = _js.askName(current)
+	var value: Variant = _js.askName(current, label)
 	return value if value is String else null
 
 

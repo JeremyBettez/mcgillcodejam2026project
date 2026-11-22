@@ -14,7 +14,9 @@ static func from_file(path: String) -> Node3D:
 	return from_bytes(FileAccess.get_file_as_bytes(path))
 
 
-static func from_bytes(bytes: PackedByteArray) -> Node3D:
+## `normalize` = scale to TARGET_HEIGHT with feet on the ground (friends). Places
+## pass false and fit the model themselves (Location.set_generated_model).
+static func from_bytes(bytes: PackedByteArray, normalize := true) -> Node3D:
 	if bytes.is_empty():
 		push_warning("GlbLoader: empty buffer")
 		return null
@@ -28,7 +30,8 @@ static func from_bytes(bytes: PackedByteArray) -> Node3D:
 	if scene == null:
 		push_warning("GlbLoader: generate_scene returned nothing")
 		return null
-	_normalize(scene)
+	if normalize:
+		_normalize(scene)
 	return scene
 
 

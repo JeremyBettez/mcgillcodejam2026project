@@ -4,18 +4,38 @@ extends Node3D
 ## this location pick their wander targets inside the area (and walk back to it
 ## if they get thrown somewhere else).
 ##
-## Today the model is built in code (see McGillModel). Later, generated models
-## (photo -> 3D, like friends) can be dropped in with `set_model`.
+## Models: built in code (McGillModel, ConstructionModel while generating) or a
+## generated GLB (photo -> 3D via the relay's /generate_place), fitted with
+## `set_generated_model`, which also builds solid walls from its bounds.
+## Front of every location = local +Z.
+
+const PLACE_MAX_WIDTH := 9.0 # generated buildings are fitted inside this...
+const PLACE_MAX_HEIGHT := 7.0 # ...and this, keeping their proportions
+## Generated models face -Z (like the AniGen friends); turn them to face +Z.
+const GENERATED_MODEL_YAW := PI
 
 var location_id := ""
-var display_name := "Location"
+var display_name := "Location":
+	set(value):
+		display_name = value
+		_update_tag()
 ## Friends wander within this radius around the location's centre...
 var hangout_radius := 6.0
 ## ...but not inside the building footprint (local XZ rectangle, centred).
 var footprint := Rect2(Vector2(-1.0, -1.0), Vector2(2.0, 2.0))
+var user_added := false # added by the player (saved, removable)
+var flag_design: Variant = null # null, "mcgill", or {"colors": [field, accent]}
+## Second line on the name sign, e.g. "building 3D..." while generating.
+var status_text := "":
+	set(value):
+		status_text = value
+		_update_tag()
 
 var model_root: Node3D
+var name_tag: Label3D
 var _pad: MeshInstance3D
+var _walls: StaticBody3D
+var _flag: Node3D
 
 
 func _ready() -> void:
@@ -45,6 +65,89 @@ func set_model(model: Node3D) -> void:
 	model_root.add_child(model)
 
 
+## Show a floating name sign (for player-added places; McGill has its own sign).
+func show_name_tag(height: float) -> void:
+	if name_tag == null:
+		name_tag = Label3D.new()
+		name_tag.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		name_tag.no_depth_test = true
+		name_tag.fixed_size = true
+		name_tag.pixel_size = 0.0014
+		name_tag.font_size = 34
+		name_tag.outline_size = 12
+		name_tag.font = UiStyle.bold()
+		name_tag.outline_modulate = UiStyle.BROWN
+		add_child(name_tag)
+	name_tag.position.y = height
+	_update_tag()
+
+
+func _update_tag() -> void:
+	if name_tag:
+		name_tag.text = display_name if status_text.is_empty() else "%s\n(%s)" % [display_name, status_text]
+
+
+## Put a generated GLB in: turned to face +Z, scaled to fit PLACE_MAX_* with its
+## base on the ground and centred, then solid walls and the footprint from its
+## bounds (so friends walk around it), and the name sign above it.
+func set_generated_model(model: Node3D) -> void:
+	var holder := Node3D.new()
+	holder.name = "Generated"
+	holder.add_child(model)
+	model.rotation.y = GENERATED_MODEL_YAW
+	var box := _bounds(holder)
+	var size := box.size
+	var s := 1.0
+	if size.x > 0.0 and size.y > 0.0 and size.z > 0.0:
+		s = minf(PLACE_MAX_WIDTH / maxf(size.x, size.z), PLACE_MAX_HEIGHT / size.y)
+	holder.scale = Vector3.ONE * s
+	var centre := box.get_center()
+	holder.position = Vector3(-centre.x * s, -box.position.y * s, -centre.z * s)
+	set_model(holder)
+	var w := size.x * s
+	var d := size.z * s
+	footprint = Rect2(Vector2(-w * 0.5, -d * 0.5), Vector2(w, d))
+	# Leave a ring of lawn around the building for friends to hang out on.
+	set_hangout_radius(maxf(hangout_radius, Vector2(w, d).length() * 0.5 + 3.5))
+	set_walls(Vector3(w, size.y * s, d))
+	show_name_tag(size.y * s + 0.8)
+	refresh_flag()
+
+
+func set_hangout_radius(radius: float) -> void:
+	hangout_radius = radius
+	if _pad and _pad.mesh is CylinderMesh:
+		(_pad.mesh as CylinderMesh).top_radius = radius
+		(_pad.mesh as CylinderMesh).bottom_radius = radius
+
+
+## Solid box walls (physics layer 1) so friends walk around the building.
+func set_walls(size: Vector3) -> void:
+	if _walls:
+		_walls.queue_free()
+	_walls = StaticBody3D.new()
+	_walls.name = "Walls"
+	var shape := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = Vector3(maxf(size.x, 0.5), maxf(size.y, 0.5), maxf(size.z, 0.5))
+	shape.shape = box
+	shape.position.y = box.size.y * 0.5
+	_walls.add_child(shape)
+	add_child(_walls)
+
+
+## (Re)place the flag pole beside the front corner of the building, if any.
+func refresh_flag() -> void:
+	if _flag:
+		_flag.queue_free()
+		_flag = null
+	if flag_design == null:
+		return
+	_flag = Flag.build(flag_design, 3.6, 1.3)
+	_flag.position = Vector3(footprint.end.x + 0.9, 0.0, footprint.end.y + 0.6)
+	add_child(_flag)
+
+
 ## A random spot in the hangout area, outside the building, in world space.
 func random_point(rng: RandomNumberGenerator) -> Vector3:
 	var grown := footprint.grow(0.7) # keep a little clearance from the walls
@@ -62,3 +165,22 @@ func random_point(rng: RandomNumberGenerator) -> Vector3:
 func contains(world_point: Vector3) -> bool:
 	var local := to_local(world_point)
 	return Vector2(local.x, local.z).length() <= hangout_radius
+
+
+## Bounds of all meshes under `root` in root's local space (includes children's transforms).
+static func _bounds(root: Node3D) -> AABB:
+	var result := AABB()
+	var first := true
+	var stack: Array = [[root, Transform3D.IDENTITY]]
+	while not stack.is_empty():
+		var item: Array = stack.pop_back()
+		var node: Node = item[0]
+		var xf: Transform3D = item[1]
+		if node is MeshInstance3D:
+			var b: AABB = xf * (node as MeshInstance3D).get_aabb()
+			result = b if first else result.merge(b)
+			first = false
+		for child in node.get_children():
+			if child is Node3D:
+				stack.append([child, xf * (child as Node3D).transform])
+	return result

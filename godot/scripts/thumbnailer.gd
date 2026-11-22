@@ -29,7 +29,9 @@ func location_picture(place: Location, done: Callable) -> void:
 	var model := place.model_root.get_child(0) as Node3D if place.model_root.get_child_count() > 0 else null
 	if model == null:
 		return
-	var key := "location:%s" % place.location_id
+	# Keyed by the model too, so a place re-renders once its real model replaces
+	# the construction site.
+	var key := "location:%s:%d" % [place.location_id, model.get_instance_id()]
 	_request(key, model, Vector3(7.0, 6.0, 13.0), Vector3(0.0, 1.6, 0.5), 38.0, false, done)
 
 

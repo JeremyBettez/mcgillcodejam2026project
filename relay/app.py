@@ -38,6 +38,22 @@ GENERATE = dict(
 )
 EXTRACT = dict(texture_size=512, simplify_ratio=0.98, fill_holes=True)
 
+# Places (buildings, restaurants...): TRELLIS image-to-3D, a static textured GLB.
+TRELLIS_SPACE = os.environ.get('TRELLIS_SPACE', 'trellis-community/TRELLIS')
+PLACE_SETTINGS = dict(
+    multiimages=[],
+    seed=0,
+    ss_guidance_strength=7.5,
+    ss_sampling_steps=12,
+    slat_guidance_strength=3.0,
+    slat_sampling_steps=12,
+    multiimage_algo='stochastic',
+    mesh_simplify=0.97, # max the Space allows is 0.98; keeps places light for phones
+    texture_size=512,
+)
+# Local testing only: return this GLB for places instead of calling TRELLIS.
+FAKE_PLACE_GLB = os.environ.get('RELAY_FAKE_PLACE_GLB') or None
+
 
 def friendly_error(err):
     text = str(err)
@@ -74,12 +90,12 @@ def sweep_old_outputs(max_age_s=600):
             shutil.rmtree(path, ignore_errors=True)
 
 
-def connect(download_dir, attempts=3):
-    """AniGen's config endpoint is sometimes slow, so wait longer and retry."""
+def connect(download_dir, attempts=3, space=None):
+    """Spaces' config endpoints are sometimes slow, so wait longer and retry."""
     for attempt in range(1, attempts + 1):
         try:
             return Client(
-                ANIGEN_SPACE,
+                space or ANIGEN_SPACE,
                 token=HF_TOKEN,
                 verbose=False,
                 download_files=download_dir,
@@ -136,6 +152,40 @@ def generate(photo_path):
         shutil.rmtree(work, ignore_errors=True)
 
 
+def generate_place(photo_path):
+    """Photo of a building/place -> textured static GLB via TRELLIS."""
+    if not photo_path:
+        raise gr.Error('No photo received.')
+    sweep_old_outputs()
+    work = tempfile.mkdtemp(prefix='phototown_')
+    try:
+        try:
+            small = shrink_photo(photo_path, work)
+        except Exception:
+            raise gr.Error('That file is not a readable image.')
+        if FAKE_PLACE_GLB:
+            if not os.path.isfile(FAKE_PLACE_GLB):
+                raise gr.Error(f'RELAY_FAKE_PLACE_GLB file not found: {FAKE_PLACE_GLB}')
+            time.sleep(FAKE_DELAY_S)
+            out_dir = tempfile.mkdtemp(prefix='phototown_out_')
+            return shutil.copy(FAKE_PLACE_GLB, os.path.join(out_dir, 'place.glb'))
+        try:
+            client = connect(work, space=TRELLIS_SPACE)
+            client.predict(api_name='/start_session')
+            cutout = client.predict(image=handle_file(small), api_name='/preprocess_image')
+            _video, glb, _download = client.predict(image=handle_file(cutout), **PLACE_SETTINGS, api_name='/generate_and_extract_glb')
+        except gr.Error:
+            raise
+        except Exception as err:
+            raise gr.Error(friendly_error(err))
+        if not glb or not os.path.isfile(glb):
+            raise gr.Error('3D generation returned no model.')
+        out_dir = tempfile.mkdtemp(prefix='phototown_out_')
+        return shutil.copy(glb, os.path.join(out_dir, 'place.glb'))
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
 with gr.Blocks(title='Photo Town relay', delete_cache=(600, 600)) as demo:
     gr.Markdown(
         '# Photo Town relay\n'
@@ -150,6 +200,14 @@ with gr.Blocks(title='Photo Town relay', delete_cache=(600, 600)) as demo:
             cutout = gr.Image(type='filepath', label='Cut-out')
     button = gr.Button('Generate', variant='primary')
     button.click(generate, inputs=photo, outputs=[glb, cutout], api_name='generate')
+
+    gr.Markdown('## Places\nPhoto of a building or place, from the front -> textured 3D model '
+                '([TRELLIS](https://huggingface.co/spaces/trellis-community/TRELLIS)).')
+    with gr.Row():
+        place_photo = gr.Image(type='filepath', label='Place photo', sources=['upload', 'webcam'])
+        place_glb = gr.File(label='Place model (.glb)')
+    place_button = gr.Button('Generate place')
+    place_button.click(generate_place, inputs=place_photo, outputs=place_glb, api_name='generate_place')
 
 demo.queue(default_concurrency_limit=2)
 

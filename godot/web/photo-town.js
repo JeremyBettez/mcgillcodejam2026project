@@ -112,8 +112,8 @@
 
   // Phone-friendly text entry (Godot's own on-screen keyboard is experimental on web).
   // Returns the trimmed name, or null if the player cancelled.
-  function askName(current) {
-    const value = window.prompt('Their name', current || '');
+  function askName(current, label) {
+    const value = window.prompt(label || 'Their name', current || '');
     return value === null ? null : value.trim().slice(0, 40);
   }
 

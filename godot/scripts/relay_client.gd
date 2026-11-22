@@ -49,8 +49,9 @@ static func resolve_url() -> String:
 	return url.strip_edges().trim_suffix("/")
 
 
-func generate(job_id: int, jpeg: PackedByteArray) -> void:
-	var result: Variant = await _run(jpeg)
+## `endpoint`: "generate" (a friend, AniGen) or "generate_place" (a place, TRELLIS).
+func generate(job_id: int, jpeg: PackedByteArray, endpoint := "generate") -> void:
+	var result: Variant = await _run(jpeg, endpoint)
 	if result is PackedByteArray:
 		finished.emit(job_id, result)
 	else:
@@ -58,7 +59,7 @@ func generate(job_id: int, jpeg: PackedByteArray) -> void:
 
 
 ## Returns the GLB bytes, or a String error message for the player.
-func _run(jpeg: PackedByteArray) -> Variant:
+func _run(jpeg: PackedByteArray, endpoint := "generate") -> Variant:
 	# 1. Upload
 	var boundary := "PhotoTown%d" % randi()
 	var body := PackedByteArray()
@@ -75,7 +76,7 @@ func _run(jpeg: PackedByteArray) -> Variant:
 
 	# 2. Start the job
 	var payload := {"data": [{"path": paths[0], "meta": {"_type": "gradio.FileData"}}]}
-	var call := await _request(base_url + "/gradio_api/call/generate", HTTPClient.METHOD_POST,
+	var call := await _request("%s/gradio_api/call/%s" % [base_url, endpoint], HTTPClient.METHOD_POST,
 		["Content-Type: application/json"], JSON.stringify(payload).to_utf8_buffer(), UPLOAD_TIMEOUT)
 	if call.error:
 		return call.error
@@ -84,7 +85,7 @@ func _run(jpeg: PackedByteArray) -> Variant:
 		return "The 3D generator didn't start the job."
 
 	# 3. Wait for the result (the server closes the stream when done)
-	var stream := await _request("%s/gradio_api/call/generate/%s" % [base_url, started.event_id],
+	var stream := await _request("%s/gradio_api/call/%s/%s" % [base_url, endpoint, started.event_id],
 		HTTPClient.METHOD_GET, [], PackedByteArray(), GENERATE_TIMEOUT)
 	if stream.error:
 		return stream.error

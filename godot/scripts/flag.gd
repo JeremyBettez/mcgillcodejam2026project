@@ -34,6 +34,37 @@ void fragment() {
 """
 
 
+## A known design for a place name, or null. Add recognizable places here.
+static func design_for_name(place_name: String) -> Variant:
+	var lower := place_name.to_lower()
+	if "mcgill" in lower:
+		return "mcgill"
+	return null
+
+
+## Generic flag colours picked from a photo: the most vivid colour as the field,
+## white or brown as the accent so it stays readable.
+static func design_from_photo(jpeg: PackedByteArray) -> Dictionary:
+	var img := Image.new()
+	if jpeg.is_empty() or img.load_jpg_from_buffer(jpeg) != OK:
+		return {"colors": [UiStyle.SKY, Color.WHITE]}
+	img.resize(16, 16, Image.INTERPOLATE_BILINEAR)
+	var best := Color(0.42, 0.66, 0.93)
+	var best_score := -1.0
+	for y in 16:
+		for x in 16:
+			var c := img.get_pixel(x, y)
+			var score := c.s * (0.4 + c.v)
+			if score > best_score:
+				best_score = score
+				best = c
+	if best.s < 0.25: # a grey/white photo: give it a friendly default
+		best = UiStyle.SKY
+	var field := Color.from_hsv(best.h, clampf(best.s, 0.45, 0.85), clampf(best.v, 0.55, 0.9))
+	var accent := Color.WHITE if field.get_luminance() < 0.6 else UiStyle.BROWN
+	return {"colors": [field, accent]}
+
+
 ## A pole with a waving flag. The pole stands at the node's origin; the flag
 ## flies towards +X near the top, facing +Z.
 static func build(design: Variant, pole_height := 1.6, flag_width := 1.0) -> Node3D:

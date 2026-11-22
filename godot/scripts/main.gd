@@ -13,6 +13,9 @@ extends Node3D
 const WORLD_RADIUS := 24.0
 const BLUE := UiStyle.SKY
 const MCGILL_POSITION := Vector3(0.0, 0.0, -10.0)
+const MAX_PLACES := 6 # places the player can add (phone performance + map space)
+const PLACE_RING := 15.0 # new places go on a ring this far from the middle...
+const PLACE_SPACING := 11.0 # ...at least this far from any other location
 const DEMO_MODEL := "res://demo/resident_demo.glb"
 const DEMO_NAME := "Kevin Tse"
 const MAX_RESIDENTS := 15 # phone performance budget, demo friend included
@@ -89,6 +92,7 @@ func _ready() -> void:
 	thumbnailer = Thumbnailer.new()
 	add_child(thumbnailer)
 	_build_locations()
+	_restore_places() # before friends, so their saved homes can be found
 	_spawn_demo()
 	_restore_world()
 	var autosave := Timer.new()
@@ -393,18 +397,171 @@ func _open_locations_list() -> void:
 			if friend.home == place:
 				count += 1
 		items.append({"text": "%s   ·   %d friend%s" % [place.display_name, count, "" if count == 1 else "s"], "action": _on_location_row.bind(place), "location": place})
-	# Coming next: photograph a place and generate its 3D model, like friends.
-	items.append({"text": "+  Add a location (coming soon)", "disabled": true})
+	items.append({"text": "+  Add a location", "action": _open_add_place_form})
 	_show_list("Locations (%d)" % locations.size(), items)
 
 
 func _on_location_row(place: Location) -> void:
 	_close_friends_sheet()
-	# Face the front of the location (its +Z side), slightly from above.
+	_fly_to_place(place)
+	hud_status.text = "%s: %s" % [place.display_name, _who_is_at(place)]
+	_show_place_actions(place)
+
+
+## Glide the camera to face the front of a location (its +Z side), from slightly
+## above, far enough back that the whole building (plus a margin) fits on screen.
+func _fly_to_place(place: Location) -> void:
 	var front := place.global_transform.basis.z
 	front.y = 0.0
-	camera_rig.view_from(place.global_position + front.normalized() * 2.0, front.normalized(), deg_to_rad(-16.0), 17.0)
-	hud_status.text = "%s: %s" % [place.display_name, _who_is_at(place)]
+	var cam := camera_rig.camera
+	var view := get_viewport().get_visible_rect().size
+	var aspect := view.x / maxf(view.y, 1.0)
+	var half_h_fov := atan(tan(deg_to_rad(cam.fov) * 0.5) * aspect) # portrait phones: narrow
+	var width := maxf(place.footprint.size.x, place.footprint.size.y) + 1.0 # building + a little margin
+	var fit := width * 0.5 / tan(half_h_fov) + place.footprint.size.y * 0.5
+	# Capped and looking a bit more downward, so other buildings between us and the
+	# place (places face the middle of the map) don't block the view.
+	camera_rig.view_from(place.global_position + front.normalized() * 1.0, front.normalized(), deg_to_rad(-26.0), clampf(fit, 13.0, 21.0))
+
+
+## Bar for a location: Retry/Remove while its model failed, Remove for places
+## the player added. Built-in places have nothing to do, so no bar.
+func _show_place_actions(place: Location) -> void:
+	_hide_actions()
+	var job: int = place.get_meta("job", 0)
+	if job and _jobs.has(job):
+		var error: String = _jobs[job].error
+		if not error.is_empty():
+			_show_actions("Couldn't build %s: %s" % [place.display_name, error],
+				[["Remove", _discard_job.bind(job)], ["Retry", _retry_job.bind(job)]])
+		return
+	if place.user_added:
+		var made := _show_actions(place.display_name, [["Remove place", _remove_place.bind(place)]])
+		_remove_button = made[0]
+
+
+func _open_add_place_form() -> void:
+	_close_friends_sheet()
+	if _user_place_count() >= MAX_PLACES:
+		hud_status.text = "There's no more room for new places (%d max). Remove one first." % MAX_PLACES
+		return
+	add_form.open("place")
+	_set_world_ui(false)
+
+
+func _user_place_count() -> int:
+	var count := 0
+	for id: String in locations:
+		if (locations[id] as Location).user_added:
+			count += 1
+	return count
+
+
+## An empty spot on a ring around the middle, at least PLACE_SPACING from every
+## other location, facing the centre. Returns null when the map is full.
+func _free_place_spot() -> Variant:
+	for i in 12:
+		var angle := PI * 0.5 + i * TAU / 12.0 # start at the south side, near the camera
+		var spot := Vector3(cos(angle), 0.0, sin(angle)) * PLACE_RING
+		var clear := true
+		for id: String in locations:
+			if (locations[id] as Location).global_position.distance_to(spot) < PLACE_SPACING:
+				clear = false
+				break
+		if clear:
+			return spot
+	return null
+
+
+func _make_place(id: String, display_name: String, at: Vector3, yaw: float) -> Location:
+	var place := Location.new()
+	place.location_id = id
+	place.display_name = display_name
+	place.hangout_radius = 7.0
+	place.user_added = true
+	place.position = at
+	place.rotation.y = yaw
+	locations_root.add_child(place)
+	locations[id] = place
+	return place
+
+
+func _on_place_submitted(display_name: String, jpeg: PackedByteArray, wants_flag: bool) -> void:
+	var spot: Variant = _free_place_spot()
+	if spot == null:
+		hud_status.text = "There's no room left on the map for another place."
+		return
+	var at: Vector3 = spot
+	# Face the middle of the map: front (+Z) = direction to the centre.
+	var to_centre := -at.normalized()
+	var place := _make_place(WorldStore.new_id(), display_name, at, atan2(to_centre.x, to_centre.z))
+	# Flag: a known design for the name, otherwise colours from the photo.
+	if wants_flag:
+		var known: Variant = Flag.design_for_name(display_name)
+		place.flag_design = known if known != null else Flag.design_from_photo(jpeg)
+	# Show a construction site until the 3D model arrives.
+	place.set_model(ConstructionModel.build())
+	place.footprint = ConstructionModel.FOOTPRINT
+	place.set_walls(Vector3(6.0, 1.0, 4.0))
+	place.show_name_tag(4.4)
+	place.refresh_flag()
+	var job := _next_job
+	_next_job += 1
+	place.set_meta("job", job)
+	_jobs[job] = {"kind": "place", "place": place, "jpeg": jpeg, "error": ""}
+	_start_job(job)
+	_fly_to_place(place)
+	hud_status.text = "Building %s. This takes a few minutes." % display_name
+
+
+func _remove_place(place: Location) -> void:
+	if not is_instance_valid(place):
+		return
+	if _remove_button and _remove_button.text != "Tap again":
+		_remove_button.text = "Tap again" # second tap confirms
+		return
+	_delete_place(place)
+
+
+func _delete_place(place: Location) -> void:
+	for friend in _friends():
+		if friend.home == place:
+			friend.home = null # they wander the whole map again
+	locations.erase(place.location_id)
+	if place.user_added:
+		WorldStore.delete_place_model(place.location_id)
+	place.queue_free()
+	_hide_actions()
+	_save_world()
+	hud_status.text = "%s was removed from the map." % place.display_name
+
+
+func _restore_places() -> void:
+	for entry in WorldStore.load_places():
+		var id := str(entry.id)
+		var model := GlbLoader.from_bytes(WorldStore.load_place_model(id), false)
+		if model == null:
+			push_warning("Skipping saved place %s: model unreadable" % id)
+			continue
+		var place := _make_place(id, str(entry.get("name", "Place")), Vector3(float(entry.get("x", 0.0)), 0.0, float(entry.get("z", 0.0))), float(entry.get("yaw", 0.0)))
+		place.flag_design = _flag_from_json(entry.get("flag"))
+		place.set_generated_model(model)
+
+
+static func _flag_to_json(design: Variant) -> Variant:
+	if design is Dictionary:
+		var colors: Array = design.get("colors", [])
+		return {"colors": colors.map(func(c: Color) -> String: return c.to_html(false))}
+	return design # null or a named design like "mcgill"
+
+
+static func _flag_from_json(value: Variant) -> Variant:
+	if value is Dictionary:
+		var colors: Array = (value as Dictionary).get("colors", [])
+		return {"colors": colors.map(func(c: Variant) -> Color: return Color.html(str(c)))}
+	if value is String and not (value as String).is_empty():
+		return value
+	return null
 
 
 func _who_is_at(place: Location) -> String:
@@ -516,6 +673,9 @@ func _resident_count() -> int:
 # --- Generating new residents -------------------------------------------------
 
 func _on_photo_submitted(display_name: String, jpeg: PackedByteArray) -> void:
+	if add_form.mode == "place":
+		_on_place_submitted(display_name, jpeg, add_form.wants_flag())
+		return
 	# A placeholder walks around while the relay builds the model (1-3 minutes).
 	var angle := randf() * TAU
 	var spot := Vector3(cos(angle), 0.0, sin(angle)) * randf_range(1.5, 3.5)
@@ -531,13 +691,30 @@ func _on_photo_submitted(display_name: String, jpeg: PackedByteArray) -> void:
 func _start_job(job: int) -> void:
 	var info: Dictionary = _jobs[job]
 	info.error = ""
+	if info.get("kind") == "place":
+		(info.place as Location).status_text = "building 3D..."
+		relay.generate(job, info.jpeg, "generate_place")
+		return
 	(info.resident as Resident).status_text = "building 3D..."
 	relay.generate(job, info.jpeg)
 
 
+## The friend or place a job is building (null if it was removed meanwhile).
+func _job_target(job: int) -> Node3D:
+	if not _jobs.has(job):
+		return null
+	var target: Variant = _jobs[job].get("place") if _jobs[job].get("kind") == "place" else _jobs[job].get("resident")
+	if target is Node3D and is_instance_valid(target) and not (target as Node3D).is_queued_for_deletion():
+		return target
+	return null
+
+
 func _on_relay_finished(job: int, glb: PackedByteArray) -> void:
-	if not _jobs.has(job) or not is_instance_valid(_jobs[job].resident):
+	if _job_target(job) == null:
 		_jobs.erase(job)
+		return
+	if _jobs[job].get("kind") == "place":
+		_on_place_built(job, glb)
 		return
 	var resident: Resident = _jobs[job].resident
 	var model := GlbLoader.from_bytes(glb)
@@ -559,28 +736,59 @@ func _on_relay_finished(job: int, glb: PackedByteArray) -> void:
 		_select(resident)
 
 
+func _on_place_built(job: int, glb: PackedByteArray) -> void:
+	var place: Location = _jobs[job].place
+	var model := GlbLoader.from_bytes(glb, false)
+	if model == null:
+		_on_relay_failed(job, "The 3D model couldn't be loaded.")
+		return
+	place.set_generated_model(model)
+	place.status_text = ""
+	place.remove_meta("job")
+	_fly_to_place(place) # re-frame: the real building is bigger than the construction site
+	_jobs.erase(job) # drops the photo from memory
+	if WorldStore.save_place_model(place.location_id, glb):
+		_save_world()
+		hud_status.text = "%s is built! Tap a friend, then Home, to have them hang out there." % place.display_name
+	else:
+		_warn_storage()
+
+
 func _on_relay_failed(job: int, message: String) -> void:
-	if not _jobs.has(job) or not is_instance_valid(_jobs[job].resident):
+	var target := _job_target(job)
+	if target == null:
 		_jobs.erase(job)
 		return
-	var resident: Resident = _jobs[job].resident
 	_jobs[job].error = message
+	if target is Location:
+		(target as Location).status_text = "couldn't build"
+		_fly_to_place(target)
+		_show_place_actions(target) # Retry / Remove right away
+		return
+	var resident: Resident = target
 	resident.status_text = "couldn't build"
 	_select(resident) # show Retry / Remove right away
 
 
 func _retry_job(job: int) -> void:
-	if _jobs.has(job):
-		_start_job(job)
-		_select(_jobs[job].resident)
+	var target := _job_target(job)
+	if target == null:
+		return
+	_start_job(job)
+	if target is Location:
+		_hide_actions()
+	else:
+		_select(target)
 
 
 func _discard_job(job: int) -> void:
-	if _jobs.has(job):
-		var resident: Resident = _jobs[job].resident
-		_jobs.erase(job) # drops the photo from memory
-		if is_instance_valid(resident):
-			resident.queue_free()
+	var target := _job_target(job)
+	_jobs.erase(job) # drops the photo from memory
+	if target is Location:
+		_delete_place(target)
+		return
+	if target:
+		target.queue_free()
 	_select(null)
 
 
@@ -612,7 +820,20 @@ func _save_world() -> void:
 				"z": snappedf(resident.global_position.z, 0.01),
 				"home": resident.home.location_id if resident.home and is_instance_valid(resident.home) else "",
 			})
-	if not WorldStore.save_index(entries):
+	# Places the player added (only once their model exists).
+	var places: Array[Dictionary] = []
+	for id: String in locations:
+		var place: Location = locations[id]
+		if place.user_added and not place.has_meta("job") and not place.is_queued_for_deletion():
+			places.append({
+				"id": place.location_id,
+				"name": place.display_name,
+				"x": snappedf(place.position.x, 0.01),
+				"z": snappedf(place.position.z, 0.01),
+				"yaw": snappedf(place.rotation.y, 0.001),
+				"flag": _flag_to_json(place.flag_design),
+			})
+	if not WorldStore.save_index(entries, places):
 		_warn_storage()
 
 

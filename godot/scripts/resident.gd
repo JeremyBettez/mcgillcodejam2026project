@@ -19,6 +19,8 @@ const TURN_SPEED := 6.0
 const ARRIVE_DISTANCE := 0.3
 const HEIGHT := GlbLoader.TARGET_HEIGHT
 const FRIEND_LAYER := 2 # physics layer bit for friends
+const DETOUR_DISTANCE := 3.0 # metres to step sideways when blocked
+const MAX_DETOURS := 6
 const HOLD_HEIGHT := 1.3 # feet height while held
 const HOLD_FOLLOW := 14.0 # how quickly a held friend follows the finger
 const GRAVITY := 14.0
@@ -72,6 +74,8 @@ var _state := State.IDLE
 var _state_time := 0.0
 var _target := Vector3.ZERO
 var _stuck_time := 0.0
+var _resume_target: Variant = null # Vector3 to go back to after a detour
+var _detours := 0
 var _rng := RandomNumberGenerator.new()
 var _face_point: Variant = null # Vector3 to turn toward while performing
 var _act_time := 0.0
@@ -401,7 +405,11 @@ func _ground_physics(delta: float) -> void:
 		State.WALK:
 			var to_target := _target - global_position
 			to_target.y = 0.0
-			if to_target.length() < ARRIVE_DISTANCE or _state_time <= 0.0:
+			if to_target.length() < ARRIVE_DISTANCE and _resume_target is Vector3:
+				# Reached the detour point: carry on to where we were going.
+				_target = _resume_target
+				_resume_target = null
+			elif to_target.length() < ARRIVE_DISTANCE or _state_time <= 0.0:
 				_enter_idle()
 			else:
 				var dir := to_target.normalized()
@@ -411,13 +419,34 @@ func _ground_physics(delta: float) -> void:
 				rotation.y = lerp_angle(rotation.y, yaw, minf(1.0, TURN_SPEED * delta))
 	move_and_slide()
 	global_position.y = 0.0
-	# Blocked by another resident: give up on this target.
+	# Blocked (a building or another friend): step sideways around it, then
+	# carry on. After a few failed detours, give up on this target.
 	if _state == State.WALK and get_real_velocity().length() < WALK_SPEED * 0.2:
 		_stuck_time += delta
-		if _stuck_time > 0.8:
-			_enter_idle()
+		if _stuck_time > 0.5:
+			_stuck_time = 0.0
+			_detours += 1
+			if _detours > MAX_DETOURS:
+				_enter_idle()
+			else:
+				_start_detour()
 	else:
 		_stuck_time = 0.0
+
+
+## Walk a few metres to the side (alternating sides) and back off a little, then
+## resume the real target. Simple, but enough to get around a building corner.
+func _start_detour() -> void:
+	var goal: Vector3 = _resume_target if _resume_target is Vector3 else _target
+	var to_goal := goal - global_position
+	to_goal.y = 0.0
+	if to_goal.length() < 0.01:
+		return
+	var forward := to_goal.normalized()
+	var side := Vector3(-forward.z, 0.0, forward.x) * (1.0 if _detours % 2 == 1 else -1.0)
+	_resume_target = goal
+	_target = global_position + side * DETOUR_DISTANCE * (1.0 + _detours * 0.5) - forward * 1.0
+	_state_time = maxf(_state_time, 8.0)
 
 
 ## Damped pendulum hanging from the head: moving the friend makes the body lag
@@ -531,11 +560,13 @@ func go_home() -> void:
 
 func _enter_walk() -> void:
 	_state = State.WALK
+	_resume_target = null
+	_detours = 0
 	if home and is_instance_valid(home):
 		# Hang out around their location (and head back there if thrown away).
 		_target = home.random_point(_rng)
 		var far := not home.contains(global_position)
-		_state_time = 40.0 if far else 12.0 # give up if it takes too long
+		_state_time = 60.0 if far else 12.0 # give up if it takes too long
 		return
 	var angle := _rng.randf() * TAU
 	var dist := sqrt(_rng.randf()) * world_radius

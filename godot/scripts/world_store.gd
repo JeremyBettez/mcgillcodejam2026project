@@ -2,11 +2,13 @@ class_name WorldStore
 extends RefCounted
 ## Saves the player's world on this device (user://, which is IndexedDB on web):
 ##   user://world.json            {"version": 1, "residents": [{id, name, x, z, created}]}
-##   user://residents/<id>.glb    the generated model (never the photo)
+##   user://residents/<id>.glb    a friend's generated model (never the photo)
+##   world.json "places": [{id, name, x, z, yaw, flag}] + user://places/<id>.glb
 ## Every call fails soft: it returns false/empty and the game keeps running.
 
 const INDEX_PATH := "user://world.json"
 const MODEL_DIR := "user://residents"
+const PLACE_DIR := "user://places"
 const VERSION := 1
 
 
@@ -28,12 +30,12 @@ static func load_index() -> Array[Dictionary]:
 	return entries
 
 
-static func save_index(entries: Array[Dictionary]) -> bool:
+static func save_index(entries: Array[Dictionary], places: Array[Dictionary] = []) -> bool:
 	var file := FileAccess.open(INDEX_PATH, FileAccess.WRITE)
 	if file == null:
 		push_warning("WorldStore: can't write world.json (%s)" % error_string(FileAccess.get_open_error()))
 		return false
-	file.store_string(JSON.stringify({"version": VERSION, "residents": entries}, "  "))
+	file.store_string(JSON.stringify({"version": VERSION, "residents": entries, "places": places}, "  "))
 	file.close()
 	return true
 
@@ -62,3 +64,44 @@ static func load_model(id: String) -> PackedByteArray:
 static func delete_model(id: String) -> void:
 	if FileAccess.file_exists(model_path(id)):
 		DirAccess.remove_absolute(model_path(id))
+
+
+# --- Places the player added ---------------------------------------------------
+
+static func load_places() -> Array[Dictionary]:
+	var places: Array[Dictionary] = []
+	if not FileAccess.file_exists(INDEX_PATH):
+		return places
+	var data: Variant = JSON.parse_string(FileAccess.get_file_as_string(INDEX_PATH))
+	if not data is Dictionary or not (data as Dictionary).get("places") is Array:
+		return places
+	for item: Variant in data.places:
+		if item is Dictionary and str(item.get("id", "")).is_valid_filename() and FileAccess.file_exists(place_model_path(str(item.id))):
+			places.append(item)
+	return places
+
+
+static func place_model_path(id: String) -> String:
+	return "%s/%s.glb" % [PLACE_DIR, id]
+
+
+static func save_place_model(id: String, glb: PackedByteArray) -> bool:
+	if DirAccess.make_dir_recursive_absolute(PLACE_DIR) != OK:
+		push_warning("WorldStore: can't create %s" % PLACE_DIR)
+		return false
+	var file := FileAccess.open(place_model_path(id), FileAccess.WRITE)
+	if file == null:
+		push_warning("WorldStore: can't write place %s" % id)
+		return false
+	file.store_buffer(glb)
+	file.close()
+	return true
+
+
+static func load_place_model(id: String) -> PackedByteArray:
+	return FileAccess.get_file_as_bytes(place_model_path(id))
+
+
+static func delete_place_model(id: String) -> void:
+	if FileAccess.file_exists(place_model_path(id)):
+		DirAccess.remove_absolute(place_model_path(id))
