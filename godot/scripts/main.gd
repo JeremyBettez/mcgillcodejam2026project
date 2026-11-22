@@ -74,6 +74,9 @@ func _ready() -> void:
 	camera_rig.position = MCGILL_POSITION + Vector3(0.0, 1.0, 5.0)
 	camera_rig.distance = 15.0
 	add_child(camera_rig)
+	var leaves := FallingLeaves.new() # gentle autumn leaves around the view
+	leaves.follow = camera_rig
+	add_child(leaves)
 	camera_rig.tapped.connect(_on_tapped)
 	camera_rig.can_grab = _can_grab
 	camera_rig.grab_started.connect(_on_grab_started)
@@ -106,9 +109,9 @@ func _ready() -> void:
 func _build_environment() -> void:
 	var env := Environment.new()
 	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color(0.64, 0.86, 0.98) # soft pastel sky
+	env.background_color = Color(0.98, 0.83, 0.68) # hazy autumn afternoon sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.92, 0.88, 0.80) # warm daylight
+	env.ambient_light_color = Color(1.0, 0.86, 0.72) # golden autumn light
 	env.ambient_light_energy = 0.75
 	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
 	var world_env := WorldEnvironment.new()
@@ -118,6 +121,7 @@ func _build_environment() -> void:
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-50.0, 35.0, 0.0)
 	sun.light_energy = 1.1
+	sun.light_color = Color(1.0, 0.92, 0.80) # low, warm fall sun
 	sun.shadow_enabled = false # keep phones fast
 	add_child(sun)
 
@@ -133,7 +137,7 @@ func _build_ground() -> void:
 	grass.mesh = disc
 	grass.position.y = -0.1
 	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.55, 0.80, 0.42) # bright pastel grass
+	mat.albedo_color = Color(0.60, 0.62, 0.32) # late-season golden grass
 	grass.material_override = mat
 	add_child(grass)
 

@@ -15,8 +15,6 @@ const WINDOW := Color(0.18, 0.22, 0.28)
 const DOOR := Color(0.30, 0.20, 0.14)
 const PATH := Color(0.78, 0.74, 0.66)
 const MCGILL_RED := Color(0.93, 0.11, 0.19)
-const LEAF := Color(0.27, 0.55, 0.28)
-const TRUNK := Color(0.42, 0.30, 0.20)
 
 ## Footprint of the solid part in local XZ (for Location.footprint).
 const FOOTPRINT := Rect2(Vector2(-4.7, -1.4), Vector2(9.4, 3.6))
@@ -141,15 +139,4 @@ static func _cylinder(parent: Node3D, mats: Dictionary, color: Color, radius: fl
 
 
 static func _tree(parent: Node3D, mats: Dictionary, at: Vector3) -> void:
-	_cylinder(parent, mats, TRUNK, 0.12, 0.8, at + Vector3(0, 0.4, 0), 6)
-	var crown := MeshInstance3D.new()
-	var cone := CylinderMesh.new()
-	cone.top_radius = 0.0
-	cone.bottom_radius = 0.75
-	cone.height = 1.6
-	cone.radial_segments = 8
-	cone.rings = 1
-	crown.mesh = cone
-	crown.material_override = _mat(mats, LEAF)
-	crown.position = at + Vector3(0, 1.55, 0)
-	parent.add_child(crown)
+	ModelKit.add_tree(parent, func(color: Color) -> StandardMaterial3D: return _mat(mats, color), at)

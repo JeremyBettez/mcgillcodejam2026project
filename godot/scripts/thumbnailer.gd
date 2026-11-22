@@ -66,9 +66,9 @@ func _render(model: Node3D, eye: Vector3, look: Vector3, fov: float, transparent
 
 	var env := Environment.new()
 	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color(0.62, 0.8, 0.95)
+	env.background_color = Color(0.98, 0.83, 0.68)
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.8, 0.82, 0.88)
+	env.ambient_light_color = Color(0.95, 0.85, 0.75)
 	env.ambient_light_energy = 0.7
 	var world_env := WorldEnvironment.new()
 	world_env.environment = env

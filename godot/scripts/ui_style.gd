@@ -1,7 +1,7 @@
 class_name UiStyle
 extends RefCounted
-## Painted pastel look (matches the goose mascot): paper-white speech-bubble
-## panels with deep indigo text, periwinkle borders and violet shadows, pill-shaped buttons and a
+## Painted fall look (matches the goose mascot art): warm paper speech-bubble
+## panels with plum-brown text, terracotta borders and warm shadows, pill-shaped buttons and a
 ## soft pastel palette. Applied once to the whole window (`apply`), so every
 ## Control inherits it; a few helpers return styleboxes for custom panels.
 ##
@@ -10,20 +10,20 @@ extends RefCounted
 
 const FONT_PATH := "res://fonts/Grandstander.ttf"
 
-# Palette, matched to the painted mascot and icons (bright oil-pastel strokes:
-# violet, periwinkle, sky blue, coral and sunny yellow on warm paper white).
+# Palette: a rich fall take on the painted mascot art (oil-pastel strokes):
+# burnt orange, maple crimson, mustard gold and a cool teal on warm paper.
 # Names are kept from the first cozy palette so existing code keeps working.
-const CREAM := Color(1.0, 0.969, 0.94)        # panels: warm paper white
-const CREAM_DARK := Color(0.953, 0.902, 0.961) # pressed / insets: lavender tint
-const TAN := Color(0.70, 0.64, 0.93)          # borders: periwinkle
-const BROWN := Color(0.231, 0.176, 0.431)     # text: deep indigo
-const BROWN_SOFT := Color(0.459, 0.408, 0.659) # secondary text
-const LEAF := Color(0.541, 0.435, 0.902)      # main accent / title sign: violet
-const LEAF_DARK := Color(0.40, 0.30, 0.76)
-const SKY := Color(0.369, 0.612, 0.941)       # locations: sky blue
-const ORANGE := Color(0.949, 0.40, 0.478)     # add a friend: coral
-const YELLOW := Color(1.0, 0.82, 0.37)        # sparkles / highlights
-const SHADOW := Color(0.25, 0.15, 0.45, 0.22)  # soft violet shadow
+const CREAM := Color(1.0, 0.957, 0.90)        # panels: warm paper
+const CREAM_DARK := Color(0.97, 0.89, 0.78)   # pressed / insets
+const TAN := Color(0.88, 0.64, 0.46)          # borders: soft terracotta
+const BROWN := Color(0.30, 0.15, 0.17)        # text: deep plum brown
+const BROWN_SOFT := Color(0.56, 0.38, 0.36)   # secondary text
+const LEAF := Color(0.89, 0.46, 0.18)         # main accent / title sign: burnt orange
+const LEAF_DARK := Color(0.68, 0.30, 0.12)
+const SKY := Color(0.18, 0.53, 0.55)          # locations: teal
+const ORANGE := Color(0.80, 0.23, 0.25)       # add a friend: maple crimson
+const YELLOW := Color(0.96, 0.73, 0.25)       # mustard highlights
+const SHADOW := Color(0.36, 0.16, 0.10, 0.24)  # warm brown shadow
 
 
 static var _font: Font

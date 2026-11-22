@@ -3,8 +3,12 @@ extends RefCounted
 ## Small helpers for low-poly location models built in code (no assets):
 ## shared flat materials, boxes, cylinders, trees, a name sign and solid walls.
 
-const TRUNK := Color(0.42, 0.30, 0.20)
-const LEAF := Color(0.27, 0.55, 0.28)
+const TRUNK := Color(0.40, 0.27, 0.20)
+## Fall foliage; most trees get one of these, every fifth stays an evergreen.
+const FALL_LEAVES: Array[Color] = [
+	Color(0.90, 0.47, 0.16), Color(0.78, 0.22, 0.18), Color(0.95, 0.70, 0.22), Color(0.70, 0.33, 0.14),
+]
+const EVERGREEN := Color(0.25, 0.45, 0.30)
 
 var root: Node3D
 var _mats := {}
@@ -64,18 +68,46 @@ func beam(color: Color, a: Vector3, b: Vector3, thickness: float, parent: Node3D
 
 
 func tree(at: Vector3, height := 1.6) -> void:
-	cylinder(TRUNK, 0.12, 0.8, at + Vector3(0, 0.4, 0), 6)
+	add_tree(root, mat, at, height)
+
+
+## A low-poly tree in fall colours (picked from its position, so it never
+## changes between runs): a round crown in orange/red/gold, or an evergreen cone.
+static func add_tree(parent: Node3D, mat_for: Callable, at: Vector3, height := 1.6) -> void:
+	var k := height / 1.6
+	var trunk := MeshInstance3D.new()
+	var stem := CylinderMesh.new()
+	stem.top_radius = 0.1
+	stem.bottom_radius = 0.14
+	stem.height = 0.9
+	stem.radial_segments = 6
+	stem.rings = 1
+	trunk.mesh = stem
+	trunk.material_override = mat_for.call(TRUNK)
+	trunk.position = at + Vector3(0, 0.45, 0)
+	parent.add_child(trunk)
+	var pick := absi(int(round(at.x * 7.0)) + int(round(at.z * 13.0)))
 	var crown := MeshInstance3D.new()
-	var cone := CylinderMesh.new()
-	cone.top_radius = 0.0
-	cone.bottom_radius = 0.75 * height / 1.6
-	cone.height = height
-	cone.radial_segments = 8
-	cone.rings = 1
-	crown.mesh = cone
-	crown.material_override = mat(LEAF)
-	crown.position = at + Vector3(0, 0.75 + height * 0.5, 0)
-	root.add_child(crown)
+	if pick % 5 == 0:
+		var cone := CylinderMesh.new()
+		cone.top_radius = 0.0
+		cone.bottom_radius = 0.75 * k
+		cone.height = height
+		cone.radial_segments = 8
+		cone.rings = 1
+		crown.mesh = cone
+		crown.material_override = mat_for.call(EVERGREEN)
+		crown.position = at + Vector3(0, 0.75 + height * 0.5, 0)
+	else:
+		var ball := SphereMesh.new()
+		ball.radius = 0.8 * k
+		ball.height = 1.5 * k
+		ball.radial_segments = 8
+		ball.rings = 4
+		crown.mesh = ball
+		crown.material_override = mat_for.call(FALL_LEAVES[pick % FALL_LEAVES.size()])
+		crown.position = at + Vector3(0, 0.8 + 0.7 * k, 0)
+	parent.add_child(crown)
 
 
 ## A low sign on a stone base with the name in the app font, facing +Z.
