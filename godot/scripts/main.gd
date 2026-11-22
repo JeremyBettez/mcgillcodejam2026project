@@ -181,7 +181,7 @@ func _build_hud() -> void:
 	sign.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	box.add_child(sign)
 	var title := Label.new()
-	title.text = "Photo Town"
+	title.text = "Friends For Render"
 	title.add_theme_font_override("font", UiStyle.bold())
 	title.add_theme_font_size_override("font_size", 28)
 	title.add_theme_color_override("font_color", Color.WHITE)

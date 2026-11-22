@@ -398,7 +398,7 @@ def paint_view(pos, rgb, axis, toward, box, width, height):
     return img, zbuf.reshape(height, width)
 
 
-def bake_texture(pos, rgb, verts, faces, normals, vert_bone, splat_bone):
+def bake_texture(pos, rgb, verts, faces, normals, vert_bone, splat_bone, arm_bones=()):
     """Paint the splat from front/back/left/right into one atlas and give each
     triangle the view it faces most directly *among the views that can see
     it*. Triangles no view sees (inner arms, armpits, between the legs) point
@@ -434,6 +434,21 @@ def bake_texture(pos, rgb, verts, faces, normals, vert_bone, splat_bone):
         score[:, i] = np.where(seen & (facing > 0.1), facing, -np.inf)
     view = np.argmax(score, axis=1)
     view[~np.isfinite(score.max(1))] = 4 # hidden from every view
+    # Forearms and hands: texture that doesn't match the limb's typical colour
+    # (shirt colour bleeding onto an arm) is replaced by that typical colour.
+    face_bone = vert_bone[faces[:, 0]]
+    face_col = np.zeros((len(faces), 3))
+    for i, (ax, tw) in enumerate(views):
+        m = view == i
+        px, py, _dep = view_pixels(centre[m], ax, tw, boxes[i], px_w[i], TEXTURE_SIZE)
+        face_col[m] = painted[i][0][py, px]
+    for bone in arm_bones:
+        m = (face_bone == bone) & (view < 4)
+        if m.sum() < 8:
+            continue
+        typical = np.median(face_col[m], axis=0)
+        off = np.linalg.norm(face_col - typical, axis=1) > 0.22
+        view[m & off] = 4
     print(f'{int((view == 4).sum())} hidden triangles use vertex colours')
 
     keys = faces.astype(np.int64) * 5 + view[:, None]
@@ -609,7 +624,8 @@ def main():
             write_glb(sys.argv[2], verts, cols, joints, joints4, weights4, faces, normals)
         else:
             verts, faces, normals, uvs, vcol, source, png = bake_texture(
-                pos, rgb, verts, faces, normals, joints4[:, 0], np.argmin(skin(pos, joints, h, info, return_dist=True), axis=1))
+                pos, rgb, verts, faces, normals, joints4[:, 0], np.argmin(skin(pos, joints, h, info, return_dist=True), axis=1),
+                [i for i, (n, _p, _q) in enumerate(joints) if n.split('_')[0] in ('elbow', 'wrist')])
             write_glb(sys.argv[2], verts, vcol, joints, joints4[source], weights4[source], faces, normals, uvs, png)
             print(f'texture: {TEXTURE_SIZE * 2}x{TEXTURE_SIZE}, {len(png) // 1024} KB')
         print(f'mesh: {len(verts)} vertices, {len(faces)} triangles, {len(joints)} joints -> {sys.argv[2]}')
