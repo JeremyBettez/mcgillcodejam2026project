@@ -21,6 +21,13 @@ The Photo Town game sends a full-body photo here. This Space calls the public
 
 `/generate`: input is an image, outputs are `[resident.glb, cutout.png]`.
 
+`/generate_place`: input is a photo of a place, output is a textured `place.glb` (TRELLIS).
+
+`/generate_place_recipe`: inputs are a photo of a place and its name, output is a
+JSON building recipe (main block, floors of windows, roof style, columns, awning,
+tower, sign, colours...). Claude reads the photo (needs the `ANTHROPIC_API_KEY`
+secret); the game builds a low-poly model from the recipe in code.
+
 ## Setup
 
 - Hardware: free CPU basic. The GPU work runs on AniGen.

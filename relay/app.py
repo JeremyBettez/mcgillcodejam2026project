@@ -1,13 +1,19 @@
-"""Photo Town relay: one photo in, one phone-friendly rigged GLB out.
+"""Photo Town relay: one photo in, one phone-friendly 3D result out.
 
-Runs as a free CPU Hugging Face Space. It keeps HF_TOKEN secret (a Space secret)
-and calls the public VAST-AI/AniGen Space, whose GPU time is billed to that token.
-The game calls the `/generate` endpoint below.
+Runs as a free CPU Hugging Face Space. It keeps HF_TOKEN and ANTHROPIC_API_KEY
+secret (Space secrets). Endpoints the game calls:
+- /generate               friend photo -> rigged GLB (VAST-AI/AniGen)
+- /generate_place         place photo -> textured GLB (TRELLIS), "Detailed 3D"
+- /generate_place_recipe  place photo + name -> JSON building recipe (Claude
+                          reads the photo); the game builds a low-poly model
+                          from it in code, "Quick build"
 
-Privacy: the photo is shrunk, stripped of metadata, sent to AniGen and deleted.
-Nothing is stored here after the request finishes.
+Privacy: the photo is shrunk, stripped of metadata, sent to the generator and
+deleted. Nothing is stored here after the request finishes.
 """
 
+import base64
+import json
 import os
 import re
 import shutil
@@ -53,6 +59,61 @@ PLACE_SETTINGS = dict(
 )
 # Local testing only: return this GLB for places instead of calling TRELLIS.
 FAKE_PLACE_GLB = os.environ.get('RELAY_FAKE_PLACE_GLB') or None
+
+# Quick build: Claude looks at the photo and describes the building as a recipe
+# of simple parts (see RECIPE_SCHEMA); the game assembles it (recipe_model.gd).
+RECIPE_MODEL = os.environ.get('RECIPE_MODEL', 'claude-opus-5-5')
+# Local testing only: return this JSON recipe instead of calling Claude.
+FAKE_RECIPE = os.environ.get('RELAY_FAKE_RECIPE') or None
+
+COLOR = {'type': 'string', 'description': 'Hex colour like #a8553a, taken from the photo.'}
+RECIPE_SCHEMA = {
+    'type': 'object',
+    'properties': {
+        'kind': {'type': 'string', 'enum': ['university', 'cafe', 'restaurant', 'shop', 'church', 'house',
+                                            'office', 'museum', 'library', 'station', 'stadium', 'tower', 'park', 'other']},
+        'width': {'type': 'number', 'description': 'Front width in metres, 4 to 10.'},
+        'depth': {'type': 'number', 'description': 'Depth in metres, 3 to 8.'},
+        'height': {'type': 'number', 'description': 'Height of the walls (not the roof) in metres, 2.5 to 8.'},
+        'floors': {'type': 'integer', 'description': 'Number of floors with windows, 1 to 5.'},
+        'wall_color': COLOR,
+        'trim_color': COLOR,
+        'roof_style': {'type': 'string', 'enum': ['flat', 'pitched', 'dome', 'mansard', 'spire']},
+        'roof_color': COLOR,
+        'wings': {'type': 'boolean', 'description': 'Lower side wings left and right of the main block.'},
+        'columns': {'type': 'integer', 'description': 'Columns across the front entrance, 0 to 6.'},
+        'column_color': COLOR,
+        'windows_per_floor': {'type': 'integer', 'description': 'Windows across the front per floor, 0 to 8.'},
+        'window_color': COLOR,
+        'door_color': COLOR,
+        'awning': {'type': 'boolean', 'description': 'A fabric awning over the ground floor.'},
+        'awning_color': COLOR,
+        'tower': {'type': 'string', 'enum': ['none', 'spire', 'dome', 'clock', 'flat']},
+        'tower_color': COLOR,
+        'sign_text': {'type': 'string', 'description': 'Short name for a sign on the front (max 20 characters), or "".'},
+        'sign_color': COLOR,
+        'sign_text_color': COLOR,
+        'flag_colors': {'type': 'array', 'items': COLOR,
+                        'description': 'Two brand or flag colours if the place has a recognizable flag or brand, else [].'},
+        'trees': {'type': 'integer', 'description': 'Trees or bushes around it, 0 to 4.'},
+    },
+    'required': ['kind', 'width', 'depth', 'height', 'floors', 'wall_color', 'trim_color', 'roof_style', 'roof_color',
+                 'wings', 'columns', 'column_color', 'windows_per_floor', 'window_color', 'door_color', 'awning',
+                 'awning_color', 'tower', 'tower_color', 'sign_text', 'sign_color', 'sign_text_color', 'flag_colors', 'trees'],
+    'additionalProperties': False,
+}
+RECIPE_SYSTEM = (
+    'You design buildings for a cozy low-poly mobile town game. You get a photo of a real place, usually '
+    'from the front, and its name. Describe it as a recipe of simple parts the game assembles from boxes, '
+    'cylinders, domes and cones: a main block (optionally with lower side wings), floors of windows, a door, '
+    'an optional portico of columns, an optional awning, a roof style, an optional tower, a front sign and '
+    'some trees. Aim for something instantly recognizable as this place in a toy-like style, not an exact '
+    'copy: pick the 2-3 most distinctive features and make them count. Sizes are stylised and must fit a '
+    'game lot: width 4-10 m, depth 3-8 m, wall height 2.5-8 m. Take colours from the photo, a little '
+    'brighter and warmer than real life; use #rrggbb. If the photo is not a building (a park, a statue, '
+    'a mural...), still describe the closest simple structure. sign_text is the name painted on the place '
+    'if one is visible, else a short form of the given name.'
+)
 
 
 def friendly_error(err):
@@ -186,6 +247,83 @@ def generate_place(photo_path):
         shutil.rmtree(work, ignore_errors=True)
 
 
+def recipe_error(err):
+    import anthropic
+    print(f'[relay] recipe error: {type(err).__name__}: {str(err)[:300]}', flush=True)
+    if isinstance(err, anthropic.AuthenticationError):
+        return 'The quick builder is not set up (missing or invalid API key).'
+    if isinstance(err, anthropic.RateLimitError):
+        return 'The quick builder is busy. Try again in a minute.'
+    if isinstance(err, anthropic.APIConnectionError):
+        return 'Could not reach the quick builder. Try again in a minute.'
+    if isinstance(err, anthropic.APIStatusError) and err.status_code >= 500:
+        return 'The quick builder is having trouble right now. Try again in a minute.'
+    return 'The quick build failed. Try another photo or Detailed 3D.'
+
+
+def ask_for_recipe(small_photo, name):
+    """Send the shrunk photo and the name to Claude; return the recipe dict."""
+    import anthropic
+    with open(small_photo, 'rb') as f:
+        image = base64.standard_b64encode(f.read()).decode('utf-8')
+    client = anthropic.Anthropic(timeout=90.0)
+    request = dict(
+        model=RECIPE_MODEL,
+        max_tokens=16000,
+        system=RECIPE_SYSTEM,
+        messages=[{
+            'role': 'user',
+            'content': [
+                {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/jpeg', 'data': image}},
+                {'type': 'text', 'text': f'The player calls this place: {name}'},
+            ],
+        }],
+        output_config={'effort': 'medium', 'format': {'type': 'json_schema', 'schema': RECIPE_SCHEMA}},
+    )
+    try:
+        # If a safety check declines on this model, the API retries on a fallback model.
+        response = client.beta.messages.create(betas=['server-side-fallback-2026-07-01'], fallbacks='default', **request)
+    except anthropic.BadRequestError:
+        response = client.messages.create(**request) # fallbacks not accepted here: plain request
+    if response.stop_reason == 'refusal':
+        raise gr.Error('The quick builder could not use that photo. Try another one or Detailed 3D.')
+    if response.stop_reason == 'max_tokens':
+        raise gr.Error('The quick build came back incomplete. Please try again.')
+    text = next((b.text for b in response.content if b.type == 'text'), '')
+    return json.loads(text)
+
+
+def generate_place_recipe(photo_path, name):
+    """Photo of a place -> JSON recipe for a low-poly building the game builds in code."""
+    if not photo_path:
+        raise gr.Error('No photo received.')
+    name = (name or '').strip()[:60] or 'This place'
+    work = tempfile.mkdtemp(prefix='phototown_')
+    try:
+        try:
+            small = shrink_photo(photo_path, work)
+        except Exception:
+            raise gr.Error('That file is not a readable image.')
+        if FAKE_RECIPE:
+            if not os.path.isfile(FAKE_RECIPE):
+                raise gr.Error(f'RELAY_FAKE_RECIPE file not found: {FAKE_RECIPE}')
+            time.sleep(min(FAKE_DELAY_S, 3.0))
+            with open(FAKE_RECIPE, encoding='utf-8') as f:
+                recipe = json.load(f)
+            recipe['sign_text'] = recipe.get('sign_text') or name[:20]
+            return json.dumps(recipe)
+        if not os.environ.get('ANTHROPIC_API_KEY'):
+            raise gr.Error('The quick builder is not set up (missing API key). Try Detailed 3D.')
+        try:
+            return json.dumps(ask_for_recipe(small, name))
+        except gr.Error:
+            raise
+        except Exception as err:
+            raise gr.Error(recipe_error(err))
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
 with gr.Blocks(title='Photo Town relay', delete_cache=(600, 600)) as demo:
     gr.Markdown(
         '# Photo Town relay\n'
@@ -208,6 +346,17 @@ with gr.Blocks(title='Photo Town relay', delete_cache=(600, 600)) as demo:
         place_glb = gr.File(label='Place model (.glb)')
     place_button = gr.Button('Generate place')
     place_button.click(generate_place, inputs=place_photo, outputs=place_glb, api_name='generate_place')
+
+    gr.Markdown('## Quick build\nPhoto of a place + its name -> a building recipe (Claude reads the photo); '
+                'the game builds a low-poly model from it.')
+    with gr.Row():
+        recipe_photo = gr.Image(type='filepath', label='Place photo', sources=['upload', 'webcam'])
+        with gr.Column():
+            recipe_name = gr.Textbox(label='Name')
+            recipe_out = gr.Textbox(label='Recipe (JSON)', lines=8)
+    recipe_button = gr.Button('Quick build')
+    recipe_button.click(generate_place_recipe, inputs=[recipe_photo, recipe_name], outputs=recipe_out,
+                        api_name='generate_place_recipe')
 
 demo.queue(default_concurrency_limit=2)
 

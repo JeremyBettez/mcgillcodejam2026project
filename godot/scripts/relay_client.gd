@@ -6,6 +6,9 @@ extends Node
 ##   2. POST {base}/gradio_api/call/generate     {"data":[FileData]} -> {"event_id"}
 ##   3. GET  {base}/gradio_api/call/generate/<id> (event stream until complete/error)
 ##   4. GET  the returned GLB file URL
+## The quick-build endpoint (generate_place_recipe) also takes the place's name
+## and returns JSON text (a building recipe) instead of a file; `finished` then
+## carries that text as UTF-8 bytes.
 ## The photo is only held in memory for the upload.
 
 signal finished(job_id: int, glb: PackedByteArray)
@@ -49,17 +52,18 @@ static func resolve_url() -> String:
 	return url.strip_edges().trim_suffix("/")
 
 
-## `endpoint`: "generate" (a friend, AniGen) or "generate_place" (a place, TRELLIS).
-func generate(job_id: int, jpeg: PackedByteArray, endpoint := "generate") -> void:
-	var result: Variant = await _run(jpeg, endpoint)
+## `endpoint`: "generate" (a friend, AniGen), "generate_place" (a place, TRELLIS)
+## or "generate_place_recipe" (a place's recipe; pass its name in `extra`).
+func generate(job_id: int, jpeg: PackedByteArray, endpoint := "generate", extra: Array = []) -> void:
+	var result: Variant = await _run(jpeg, endpoint, extra)
 	if result is PackedByteArray:
 		finished.emit(job_id, result)
 	else:
 		failed.emit(job_id, str(result))
 
 
-## Returns the GLB bytes, or a String error message for the player.
-func _run(jpeg: PackedByteArray, endpoint := "generate") -> Variant:
+## Returns the GLB bytes (or recipe JSON bytes), or a String error message for the player.
+func _run(jpeg: PackedByteArray, endpoint := "generate", extra: Array = []) -> Variant:
 	# 1. Upload
 	var boundary := "PhotoTown%d" % randi()
 	var body := PackedByteArray()
@@ -75,7 +79,7 @@ func _run(jpeg: PackedByteArray, endpoint := "generate") -> Variant:
 		return "The 3D generator didn't accept the photo."
 
 	# 2. Start the job
-	var payload := {"data": [{"path": paths[0], "meta": {"_type": "gradio.FileData"}}]}
+	var payload := {"data": [{"path": paths[0], "meta": {"_type": "gradio.FileData"}}] + extra}
 	var call := await _request("%s/gradio_api/call/%s" % [base_url, endpoint], HTTPClient.METHOD_POST,
 		["Content-Type: application/json"], JSON.stringify(payload).to_utf8_buffer(), UPLOAD_TIMEOUT)
 	if call.error:
@@ -99,6 +103,11 @@ func _run(jpeg: PackedByteArray, endpoint := "generate") -> Variant:
 	if event.name != "complete":
 		return "3D generation stopped unexpectedly. Please try again."
 	var outputs: Variant = JSON.parse_string(event.data)
+	if outputs is Array and not (outputs as Array).is_empty() and outputs[0] is String:
+		# A recipe (JSON text), not a file.
+		if not JSON.parse_string(str(outputs[0])) is Dictionary:
+			return "The quick build came back garbled. Please try again."
+		return str(outputs[0]).to_utf8_buffer()
 	if not outputs is Array or (outputs as Array).is_empty() or not outputs[0] is Dictionary:
 		return "3D generation returned no model."
 	var glb_file: Dictionary = outputs[0]

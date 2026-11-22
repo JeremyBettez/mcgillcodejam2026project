@@ -119,6 +119,21 @@ func set_generated_model(model: Node3D) -> void:
 	refresh_flag()
 
 
+## Put in a Quick build model (RecipeModel.build() result): it already faces +Z
+## and has its own walls, so just take its footprint and height.
+func set_recipe_model(built: Dictionary) -> void:
+	set_model(built.model)
+	footprint = built.footprint
+	if _walls:
+		_walls.queue_free() # the construction site's walls
+		_walls = null
+	set_hangout_radius(maxf(hangout_radius, footprint.size.length() * 0.5 + 3.5))
+	show_name_tag(float(built.height) + 0.8)
+	# Step the camera back far enough to see towers and roofs.
+	view_distance = clampf(float(built.height) * 2.4 + 8.0, 15.0, 28.0)
+	refresh_flag()
+
+
 func set_hangout_radius(radius: float) -> void:
 	hangout_radius = radius
 	if _pad and _pad.mesh is CylinderMesh:

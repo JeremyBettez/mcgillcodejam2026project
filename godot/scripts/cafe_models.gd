@@ -67,7 +67,7 @@ static func mcdonalds() -> Node3D:
 	kit.box(roof, Vector3(7.0, 0.35, 4.4), Vector3(0, 3.0, -0.2))
 	kit.box(roof, Vector3(6.4, 0.35, 3.9), Vector3(0, 3.35, -0.2))
 	kit.box(roof.lightened(0.1), Vector3(5.8, 0.15, 3.4), Vector3(0, 3.6, -0.2))
-	kit.box(yellow, Vector3(7.0, 0.18, 4.4), Vector3(0, 2.82, -0.2)) # yellow trim
+	kit.box(yellow, Vector3(7.08, 0.16, 4.48), Vector3(0, 2.74, -0.2)) # yellow trim (proud of the wall and roof, no shared faces)
 	# Big front windows, door, and the name in yellow on a red band.
 	for x in [-2.4, -1.0, 1.9]:
 		kit.box(GLASS, Vector3(1.2, 1.4, 0.05), Vector3(x, 1.15, 1.92))
@@ -81,9 +81,14 @@ static func mcdonalds() -> Node3D:
 	kit.box(red, Vector3(1.9, 1.5, 0.18), Vector3(-4.4, 4.95, 1.6))
 	_logo(kit, "arches", 1.4, Vector3(-4.4, 5.15, 1.7))
 	_label(kit, "McDonald's", Vector3(-4.4, 4.45, 1.7), Color.WHITE, 0.0034)
-	# Drive-through lane on the side.
-	kit.box(Color(0.35, 0.35, 0.38), Vector3(1.8, 0.02, 6.0), Vector3(4.6, 0.01, 0.6))
-	kit.box(yellow, Vector3(0.1, 0.02, 6.0), Vector3(4.6, 0.02, 0.6))
+	# Drive-through lane down the side, raised clear of the lawn so the two
+	# don't flicker into each other, with a painted line on top, a pickup
+	# window in the side wall and a little awning over it.
+	kit.box(Color(0.35, 0.35, 0.38), Vector3(1.8, 0.06, 6.0), Vector3(4.65, 0.03, 0.4))
+	kit.box(Color(0.62, 0.60, 0.56), Vector3(0.12, 0.1, 6.0), Vector3(3.7, 0.05, 0.4)) # curb
+	kit.box(yellow, Vector3(0.1, 0.01, 5.6), Vector3(4.65, 0.065, 0.4))
+	kit.box(GLASS, Vector3(0.05, 0.8, 1.0), Vector3(3.43, 1.3, 0.4))
+	kit.box(yellow, Vector3(0.5, 0.06, 1.3), Vector3(3.62, 1.82, 0.4))
 	kit.walls(MCDONALDS_FOOTPRINT, 3.0)
 	return kit.root
 

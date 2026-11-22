@@ -30,6 +30,7 @@ var _library_button: Button
 var _heading: Label
 var _tip: Label
 var _flag_check: CheckBox
+var _detailed_check: CheckBox
 
 
 func _ready() -> void:
@@ -113,6 +114,13 @@ func _ready() -> void:
 	_flag_check.focus_mode = Control.FOCUS_NONE
 	_flag_check.add_theme_font_size_override("font_size", 18)
 	box.add_child(_flag_check)
+	# Places only: Quick build (low-poly, built in code from what Claude sees in
+	# the photo, ~20 s) is the default; Detailed 3D asks TRELLIS for a full mesh.
+	_detailed_check = CheckBox.new()
+	_detailed_check.text = "Detailed 3D scan (slower, 1-3 min)"
+	_detailed_check.focus_mode = Control.FOCUS_NONE
+	_detailed_check.add_theme_font_size_override("font_size", 18)
+	box.add_child(_detailed_check)
 
 	_status = _label("", 16)
 	_status.add_theme_color_override("font_color", Color(0.85, 0.3, 0.25))
@@ -148,6 +156,8 @@ func open(form_mode := "friend") -> void:
 	_name_edit.placeholder_text = t.placeholder
 	_flag_check.visible = mode == "place"
 	_flag_check.button_pressed = false
+	_detailed_check.visible = mode == "place"
+	_detailed_check.button_pressed = false
 	_reset()
 	visible = true
 	UiFx.pop_in(_card, 0.0, 0.8)
@@ -213,6 +223,11 @@ func _on_generate() -> void:
 	var jpeg := _jpeg
 	submitted.emit(display_name, jpeg)
 	close()
+
+
+## For places: true = Detailed 3D (TRELLIS mesh), false = Quick build (recipe).
+func wants_detailed() -> bool:
+	return mode == "place" and _detailed_check.button_pressed
 
 
 ## For places: whether to fly a flag.

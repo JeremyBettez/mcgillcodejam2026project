@@ -3,7 +3,8 @@ extends RefCounted
 ## Saves the player's world on this device (user://, which is IndexedDB on web):
 ##   user://world.json            {"version": 1, "residents": [{id, name, x, z, created}]}
 ##   user://residents/<id>.glb    a friend's generated model (never the photo)
-##   world.json "places": [{id, name, district, lot, flag...}] + user://places/<id>.glb
+##   world.json "places": [{id, name, district, lot, flag, recipe?}] + user://places/<id>.glb
+##     (Quick build places store their "recipe" instead of a GLB)
 ##   world.json "layout": {builtin id: {district, lot}} (moved built-in places)
 ## Every call fails soft: it returns false/empty and the game keeps running.
 
@@ -87,7 +88,10 @@ static func load_places() -> Array[Dictionary]:
 	if not data is Dictionary or not (data as Dictionary).get("places") is Array:
 		return places
 	for item: Variant in data.places:
-		if item is Dictionary and str(item.get("id", "")).is_valid_filename() and FileAccess.file_exists(place_model_path(str(item.id))):
+		if not item is Dictionary or not str(item.get("id", "")).is_valid_filename():
+			continue
+		# Quick build places keep their recipe in world.json; others need their GLB.
+		if (item as Dictionary).get("recipe") is Dictionary or FileAccess.file_exists(place_model_path(str(item.id))):
 			places.append(item)
 	return places
 

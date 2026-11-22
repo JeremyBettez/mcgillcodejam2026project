@@ -405,6 +405,9 @@ func _build_locations() -> void:
 	_add_builtin("starbucks", "Starbucks", CafeModels.starbucks(), CafeModels.STARBUCKS_FOOTPRINT, "downtown", 6.0, 15.0)
 	_add_builtin("mcdonalds", "McDonald's", CafeModels.mcdonalds(), CafeModels.MCDONALDS_FOOTPRINT, "downtown", 6.0, 16.0)
 	_add_builtin("oratory", "Saint Joseph's Oratory", OratoryModel.build(), OratoryModel.FOOTPRINT, "cote_des_neiges", 8.0, 30.0)
+	var marianopolis := MarianopolisModel.build()
+	_add_builtin("marianopolis", "Marianopolis College", marianopolis.model, marianopolis.footprint, "cote_des_neiges", 8.0,
+		clampf(float(marianopolis.height) * 2.4 + 8.0, 15.0, 28.0))
 	_add_builtin("old_port", "Old Port", OldPortModel.build(), OldPortModel.FOOTPRINT, "old_montreal", 8.0, 23.0)
 	_add_builtin("jean_drapeau", "Parc Jean-Drapeau", JeanDrapeauModel.build(), JeanDrapeauModel.FOOTPRINT, "islands", 7.5, 18.0)
 
@@ -549,7 +552,9 @@ func _make_place(id: String, display_name: String, district: District, lot: int)
 	return place
 
 
-func _on_place_submitted(display_name: String, jpeg: PackedByteArray, wants_flag: bool) -> void:
+## `detailed`: Detailed 3D (TRELLIS mesh) instead of the default Quick build
+## (Claude describes the photo as a recipe, RecipeModel builds it in code).
+func _on_place_submitted(display_name: String, jpeg: PackedByteArray, wants_flag: bool, detailed := false) -> void:
 	var spot := _find_lot()
 	if spot.is_empty():
 		hud_status.text = "There's no room left in town for another place."
@@ -568,10 +573,11 @@ func _on_place_submitted(display_name: String, jpeg: PackedByteArray, wants_flag
 	var job := _next_job
 	_next_job += 1
 	place.set_meta("job", job)
-	_jobs[job] = {"kind": "place", "place": place, "jpeg": jpeg, "error": ""}
+	_jobs[job] = {"kind": "place", "place": place, "jpeg": jpeg, "error": "",
+		"style": "mesh" if detailed else "recipe", "wants_flag": wants_flag}
 	_start_job(job)
 	_fly_to_place(place)
-	hud_status.text = "Building %s. This takes a few minutes." % display_name
+	hud_status.text = ("Building %s. This takes a few minutes." if detailed else "Designing %s. This takes about 20 seconds.") % display_name
 
 
 func _remove_place(place: Location) -> void:
@@ -602,10 +608,13 @@ func _delete_place(place: Location) -> void:
 func _restore_places() -> void:
 	for entry in WorldStore.load_places():
 		var id := str(entry.id)
-		var model := GlbLoader.from_bytes(WorldStore.load_place_model(id), false)
-		if model == null:
-			push_warning("Skipping saved place %s: model unreadable" % id)
-			continue
+		var recipe: Variant = entry.get("recipe")
+		var model: Node3D = null
+		if not recipe is Dictionary:
+			model = GlbLoader.from_bytes(WorldStore.load_place_model(id), false)
+			if model == null:
+				push_warning("Skipping saved place %s: model unreadable" % id)
+				continue
 		# Back into its saved lot (creating its district); older saves, or a
 		# lot that is somehow taken, just get the next free lot.
 		var spot := []
@@ -623,7 +632,11 @@ func _restore_places() -> void:
 			continue
 		var place := _make_place(id, str(entry.get("name", "Place")), spot[0], spot[1])
 		place.flag_design = _flag_from_json(entry.get("flag"))
-		place.set_generated_model(model)
+		if recipe is Dictionary:
+			place.set_recipe_model(RecipeModel.build(recipe))
+			place.set_meta("recipe", recipe)
+		else:
+			place.set_generated_model(model)
 
 
 static func _flag_to_json(design: Variant) -> Variant:
@@ -752,7 +765,7 @@ func _resident_count() -> int:
 
 func _on_photo_submitted(display_name: String, jpeg: PackedByteArray) -> void:
 	if add_form.mode == "place":
-		_on_place_submitted(display_name, jpeg, add_form.wants_flag())
+		_on_place_submitted(display_name, jpeg, add_form.wants_flag(), add_form.wants_detailed())
 		return
 	# A placeholder walks around while the relay builds the model (1-3 minutes).
 	var angle := randf() * TAU
@@ -770,8 +783,13 @@ func _start_job(job: int) -> void:
 	var info: Dictionary = _jobs[job]
 	info.error = ""
 	if info.get("kind") == "place":
-		(info.place as Location).status_text = "building 3D..."
-		relay.generate(job, info.jpeg, "generate_place")
+		var place: Location = info.place
+		if info.get("style") == "recipe":
+			place.status_text = "designing..."
+			relay.generate(job, info.jpeg, "generate_place_recipe", [place.display_name])
+		else:
+			place.status_text = "building 3D..."
+			relay.generate(job, info.jpeg, "generate_place")
 		return
 	(info.resident as Resident).status_text = "building 3D..."
 	relay.generate(job, info.jpeg)
@@ -816,6 +834,9 @@ func _on_relay_finished(job: int, glb: PackedByteArray) -> void:
 
 func _on_place_built(job: int, glb: PackedByteArray) -> void:
 	var place: Location = _jobs[job].place
+	if _jobs[job].get("style") == "recipe":
+		_on_recipe_built(job, glb.get_string_from_utf8())
+		return
 	var model := GlbLoader.from_bytes(glb, false)
 	if model == null:
 		_on_relay_failed(job, "The 3D model couldn't be loaded.")
@@ -830,6 +851,29 @@ func _on_place_built(job: int, glb: PackedByteArray) -> void:
 		hud_status.text = "%s is built! Tap a friend, then Home, to have them hang out there." % place.display_name
 	else:
 		_warn_storage()
+
+
+## Quick build: the relay sent a recipe; build the low-poly model in code.
+func _on_recipe_built(job: int, text: String) -> void:
+	var place: Location = _jobs[job].place
+	var recipe: Variant = JSON.parse_string(text)
+	if not recipe is Dictionary:
+		_on_relay_failed(job, "The quick build came back garbled. Please try again.")
+		return
+	var built := RecipeModel.build(recipe)
+	# A flag the player asked for: a known design, else the colours the builder
+	# saw (brand colours beat the photo's average colours).
+	if _jobs[job].get("wants_flag") and Flag.design_for_name(place.display_name) == null and built.flag != null:
+		place.flag_design = built.flag
+	place.set_recipe_model(built)
+	place.set_meta("recipe", recipe)
+	place.status_text = ""
+	place.remove_meta("job")
+	_jobs.erase(job) # drops the photo from memory
+	_glide(place, place.global_position + Vector3(0.0, 2.0, 0.0), place.global_position, true)
+	_fly_to_place(place)
+	_save_world()
+	hud_status.text = "%s is built! Long-press it to move it, or send friends to hang out there." % place.display_name
 
 
 func _on_relay_failed(job: int, message: String) -> void:
@@ -912,6 +956,7 @@ func _save_world() -> void:
 				"district": place.district_id,
 				"lot": place.lot,
 				"flag": _flag_to_json(place.flag_design),
+				"recipe": place.get_meta("recipe") if place.has_meta("recipe") else null,
 			})
 	# Built-in places that were moved: which plot each one is on now.
 	var layout := {}

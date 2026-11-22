@@ -6,6 +6,8 @@
   "scripts": {
     "anigen": "node --env-file-if-exists=.env.local scripts/anigen-test.mjs",
     "export:web": "node scripts/export-web.mjs",
+    "relay": "node scripts/run-relay.mjs",
+    "relay:test": "node scripts/run-relay.mjs --test",
     "serve:lan": "vite --host --mode lan",
     "serve": "vite"
   },
