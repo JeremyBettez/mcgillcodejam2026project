@@ -1,63 +1,93 @@
 class_name District
 extends Node3D
-## A neighbourhood of the town: a lightly tinted lawn with a row of building
-## lots that all face the camera (+Z), and a wooden signpost with its name.
-## Empty lots show a dirt plot with corner stakes until a place moves in.
+## A neighbourhood of the town: a lightly tinted lawn with a wooden signpost.
+## Purely a label on the land: places stand wherever the player puts them, and
+## a neighbourhood appears under any grid cell that has a place in it (see
+## main.gd `_sync_districts`). The land itself has no edge.
 ##
-## Districts sit on a fixed grid (see SLOTS); the town grows a new one when
-## every lot is taken, so lots of places never pile up in one spot.
+## Cells are CELL_W x CELL_D metres; cell (0, 0) is centred on the origin.
 
-const LOTS := [-12.0, 0.0, 12.0] # lot x offsets; filled middle first (see FILL_ORDER)
-const FILL_ORDER := [1, 0, 2]
-const WIDTH := 36.0
+const CELL_W := 40.0
+const CELL_D := 26.0
+const WIDTH := 36.0 # lawn patch size (a little smaller than a cell)
 const DEPTH := 20.0
 
-## The first BUILT_IN slots always exist (they hold the built-in places); later
-## ones are added by the player or as the town fills up, and can be removed
-## again while all their plots are empty.
-const BUILT_IN := 4
-## Grid of district slots (Montreal neighbourhoods).
+## Named neighbourhoods at known cells (Montreal). Other cells take a name
+## from EXTRA_NAMES, and past those a numbered one.
 const SLOTS := [
-	{"id": "downtown", "name": "Downtown", "at": Vector3(0, 0, 0), "tint": Color(0.64, 0.64, 0.35)},
-	{"id": "old_montreal", "name": "Old Montréal", "at": Vector3(0, 0, 26), "tint": Color(0.67, 0.61, 0.36)},
-	{"id": "islands", "name": "The Islands", "at": Vector3(40, 0, 26), "tint": Color(0.57, 0.64, 0.36)},
-	{"id": "cote_des_neiges", "name": "Côte-des-Neiges", "at": Vector3(-40, 0, 0), "tint": Color(0.58, 0.62, 0.34), "signpost": false},
-	{"id": "plateau", "name": "Plateau", "at": Vector3(40, 0, 0), "tint": Color(0.68, 0.58, 0.34)},
-	{"id": "mile_end", "name": "Mile End", "at": Vector3(40, 0, -26), "tint": Color(0.62, 0.60, 0.38)},
-	{"id": "outremont", "name": "Outremont", "at": Vector3(0, 0, -26), "tint": Color(0.60, 0.65, 0.37)},
-	{"id": "saint_henri", "name": "Saint-Henri", "at": Vector3(-40, 0, 26), "tint": Color(0.66, 0.62, 0.33)},
-	{"id": "verdun", "name": "Verdun", "at": Vector3(0, 0, 52), "tint": Color(0.63, 0.63, 0.40)},
-	{"id": "rosemont", "name": "Rosemont", "at": Vector3(40, 0, 52), "tint": Color(0.69, 0.60, 0.37)},
-	{"id": "westmount", "name": "Westmount", "at": Vector3(-40, 0, -26), "tint": Color(0.57, 0.63, 0.38)},
-	{"id": "little_italy", "name": "Little Italy", "at": Vector3(0, 0, -52), "tint": Color(0.66, 0.64, 0.36)},
-	{"id": "hochelaga", "name": "Hochelaga", "at": Vector3(80, 0, 0), "tint": Color(0.62, 0.58, 0.35)},
-	{"id": "lachine", "name": "Lachine", "at": Vector3(-40, 0, 52), "tint": Color(0.60, 0.66, 0.39)},
+	{"id": "downtown", "name": "Downtown", "cell": Vector2i(0, 0), "tint": Color(0.64, 0.64, 0.35)},
+	{"id": "old_montreal", "name": "Old Montréal", "cell": Vector2i(0, 1), "tint": Color(0.67, 0.61, 0.36)},
+	{"id": "islands", "name": "The Islands", "cell": Vector2i(1, 1), "tint": Color(0.57, 0.64, 0.36)},
+	{"id": "cote_des_neiges", "name": "Côte-des-Neiges", "cell": Vector2i(-1, 0), "tint": Color(0.58, 0.62, 0.34), "signpost": false},
+	{"id": "plateau", "name": "Plateau", "cell": Vector2i(1, 0), "tint": Color(0.68, 0.58, 0.34)},
+	{"id": "mile_end", "name": "Mile End", "cell": Vector2i(1, -1), "tint": Color(0.62, 0.60, 0.38)},
+	{"id": "outremont", "name": "Outremont", "cell": Vector2i(0, -1), "tint": Color(0.60, 0.65, 0.37)},
+	{"id": "saint_henri", "name": "Saint-Henri", "cell": Vector2i(-1, 1), "tint": Color(0.66, 0.62, 0.33)},
+	{"id": "verdun", "name": "Verdun", "cell": Vector2i(0, 2), "tint": Color(0.63, 0.63, 0.40)},
+	{"id": "rosemont", "name": "Rosemont", "cell": Vector2i(1, 2), "tint": Color(0.69, 0.60, 0.37)},
+	{"id": "westmount", "name": "Westmount", "cell": Vector2i(-1, -1), "tint": Color(0.57, 0.63, 0.38)},
+	{"id": "little_italy", "name": "Little Italy", "cell": Vector2i(0, -2), "tint": Color(0.66, 0.64, 0.36)},
+	{"id": "hochelaga", "name": "Hochelaga", "cell": Vector2i(2, 0), "tint": Color(0.62, 0.58, 0.35)},
+	{"id": "lachine", "name": "Lachine", "cell": Vector2i(-1, 2), "tint": Color(0.60, 0.66, 0.39)},
 ]
+const EXTRA_NAMES := [
+	"Griffintown", "Villeray", "Ahuntsic", "Saint-Laurent", "LaSalle",
+	"Pointe-Claire", "Anjou", "Montréal-Nord", "Parc-Ex", "Notre-Dame-de-Grâce",
+	"Saint-Michel", "Rivière-des-Prairies", "Pointe-Saint-Charles", "Shaughnessy",
+	"Ville-Marie", "Petite-Patrie", "Cartierville", "Dorval", "Lasalle Shore",
+	"Mercier", "Côte-Saint-Luc", "Hampstead", "Mont-Royal", "Saint-Léonard",
+]
+## Where saves from before free placement put each lot (x offset in its district).
+const OLD_LOTS := [-12.0, 0.0, 12.0]
 
 var district_id := ""
 var display_name := ""
-var slot := 0
-## Location id in each lot ("" = free).
-var occupants: Array[String] = ["", "", ""]
-
-var _plots: Array[Node3D] = []
+var cell := Vector2i.ZERO
 
 
-static func slot_index(id: String) -> int:
-	for i in SLOTS.size():
-		if SLOTS[i].id == id:
-			return i
-	return -1
+## The grid cell a world point falls in.
+static func cell_of(point: Vector3) -> Vector2i:
+	return Vector2i(roundi(point.x / CELL_W), roundi(point.z / CELL_D))
 
 
-func _init(slot_number: int) -> void:
-	slot = slot_number
-	var info: Dictionary = SLOTS[slot]
+static func center_of(c: Vector2i) -> Vector3:
+	return Vector3(c.x * CELL_W, 0.0, c.y * CELL_D)
+
+
+## {id, name, tint, signpost} for any cell: a named slot, or a generated one.
+static func info_for(c: Vector2i) -> Dictionary:
+	for info: Dictionary in SLOTS:
+		if info.cell == c:
+			return {"id": info.id, "name": info.name, "tint": info.tint, "signpost": info.get("signpost", true)}
+	# Stable pseudo-random pick per cell, so a cell always has the same name.
+	var h := absi(hash(c))
+	var id := "cell_%d_%d" % [c.x, c.y]
+	var name_ := str(EXTRA_NAMES[h % EXTRA_NAMES.size()])
+	# Two far-apart cells can draw the same name; number the repeats.
+	var round_ := (h / EXTRA_NAMES.size()) % 4
+	if round_ > 0:
+		name_ += " %d" % (round_ + 1)
+	var tint := Color(0.60, 0.62, 0.35).lerp(Color(0.68, 0.60, 0.37), float(h % 97) / 96.0)
+	return {"id": id, "name": name_, "tint": tint, "signpost": true}
+
+
+## A saved {district, lot} from before free placement, as a world position
+## (or null if the district id isn't one of the named ones).
+static func old_lot_position(district_id_: String, lot: int) -> Variant:
+	for info: Dictionary in SLOTS:
+		if info.id == district_id_ and lot >= 0 and lot < OLD_LOTS.size():
+			return center_of(info.cell) + Vector3(OLD_LOTS[lot], 0.0, 0.0)
+	return null
+
+
+func _init(c: Vector2i) -> void:
+	cell = c
+	var info := info_for(c)
 	district_id = info.id
 	display_name = info.name
 	name = "District_" + district_id
-	position = info.at
-	_build(info.tint, info.get("signpost", true))
+	position = center_of(c)
+	_build(info.tint, info.signpost)
 
 
 func _build(tint: Color, signpost: bool) -> void:
@@ -82,52 +112,3 @@ func _build(tint: Color, signpost: bool) -> void:
 		label.modulate = UiStyle.BROWN
 		label.position = post_at + Vector3(0.9, 1.55, 0.06)
 		kit.root.add_child(label)
-	# Empty-lot plots.
-	for i in LOTS.size():
-		var plot := Node3D.new()
-		plot.position = lot_offset(i)
-		kit.root.add_child(plot)
-		kit.box(Color(0.55, 0.42, 0.28), Vector3(7.0, 0.02, 5.0), Vector3(0, 0.008, 0), plot)
-		for corner in [Vector3(-3.4, 0, -2.4), Vector3(3.4, 0, -2.4), Vector3(-3.4, 0, 2.4), Vector3(3.4, 0, 2.4)]:
-			kit.box(Color(0.80, 0.62, 0.40), Vector3(0.12, 0.5, 0.12), corner + Vector3(0, 0.25, 0), plot)
-		_plots.append(plot)
-
-
-func lot_offset(lot: int) -> Vector3:
-	return Vector3(LOTS[lot], 0.0, 0.0)
-
-
-func lot_position(lot: int) -> Vector3:
-	return position + lot_offset(lot)
-
-
-## First free lot in fill order, or -1.
-func free_lot() -> int:
-	for lot: int in FILL_ORDER:
-		if occupants[lot].is_empty():
-			return lot
-	return -1
-
-
-## True if no place stands on any of its plots.
-func is_empty() -> bool:
-	for id in occupants:
-		if not id.is_empty():
-			return false
-	return true
-
-
-func is_free(lot: int) -> bool:
-	return lot >= 0 and lot < occupants.size() and occupants[lot].is_empty()
-
-
-func occupy(lot: int, location_id: String) -> void:
-	occupants[lot] = location_id
-	_plots[lot].visible = false
-
-
-func release(location_id: String) -> void:
-	for lot in occupants.size():
-		if occupants[lot] == location_id:
-			occupants[lot] = ""
-			_plots[lot].visible = true

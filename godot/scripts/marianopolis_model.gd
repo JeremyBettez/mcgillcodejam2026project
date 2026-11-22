@@ -33,8 +33,17 @@ const RECIPE := {
 }
 
 
-## Same result shape as RecipeModel.build(): {model, footprint, height, flag}.
+## Same result shape as RecipeModel.build(). Adds the college emblem
+## (BrandLogos "marianopolis", a navy shield with a gold rim and a white M; a
+## stand-in, not the official logo) on the cupola tower and the pediment.
 static func build() -> Dictionary:
 	var built := RecipeModel.build(RECIPE)
-	(built.model as Node3D).name = "Marianopolis"
+	var model: Node3D = built.model
+	model.name = "Marianopolis"
+	var anchors: Dictionary = built.get("anchors", {})
+	for spot: Array in [["tower_front", 1.05], ["pediment_front", 0.5]]:
+		if anchors.has(spot[0]):
+			var emblem := BrandLogos.quad("marianopolis", spot[1])
+			emblem.position = anchors[spot[0]]
+			model.add_child(emblem)
 	return built

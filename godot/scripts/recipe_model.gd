@@ -7,7 +7,10 @@ extends RefCounted
 ## falls back to a sensible default, so any recipe builds *something*.
 ##
 ## build() returns {"model": Node3D, "footprint": Rect2, "height": float,
-## "flag": null or {"colors": [field, accent]}}. Faces +Z.
+## "flag": null or {"colors": [field, accent]}, "anchors": {name: Vector3}}.
+## Anchors are front-facing spots for extra decoration (e.g. a logo), only
+## present when that part exists: "tower_front", "pediment_front", "entrance".
+## Faces +Z.
 
 const STONE := Color(0.70, 0.67, 0.60)
 const GLASS := Color(0.24, 0.32, 0.42)
@@ -31,6 +34,7 @@ static func build(recipe: Dictionary) -> Dictionary:
 	var floor_h := h / floors
 	var top := PLINTH + h # top of the walls
 	var front := d * 0.5
+	var anchors := {"entrance": Vector3(0, PLINTH + minf(1.9, floor_h * 0.8) + 0.45, front + 0.05)}
 
 	# Base and main block, with a trim band under the roof.
 	kit.box(STONE, Vector3(w + 0.4, PLINTH, d + 0.4), Vector3(0, PLINTH * 0.5, 0))
@@ -87,6 +91,7 @@ static func build(recipe: Dictionary) -> Dictionary:
 			pediment.mesh = prism
 			pediment.material_override = kit.mat(column_color)
 			pediment.position = Vector3(0, PLINTH + col_h + 0.3 + 0.375, front + porch * 0.5)
+			anchors["pediment_front"] = Vector3(0, PLINTH + col_h + 0.3 + 0.28, front + porch + 0.02)
 			kit.root.add_child(pediment)
 
 	# Awning over the ground floor.
@@ -150,6 +155,7 @@ static func build(recipe: Dictionary) -> Dictionary:
 		var base := maxf(top, height - 0.6)
 		var tz := -d * 0.15
 		kit.box(tower_color, Vector3(tw, th, tw), Vector3(0, base + th * 0.5, tz))
+		anchors["tower_front"] = Vector3(0, base + th * 0.5, tz + tw * 0.5 + 0.02)
 		var tower_top := base + th
 		match tower:
 			"spire":
@@ -210,7 +216,7 @@ static func build(recipe: Dictionary) -> Dictionary:
 	if flag_colors is Array and not (flag_colors as Array).is_empty() and Color.html_is_valid(str(flag_colors[0])):
 		var accent := Color.html(str(flag_colors[1])) if flag_colors.size() > 1 and Color.html_is_valid(str(flag_colors[1])) else Color.WHITE
 		flag = {"colors": [Color.html(str(flag_colors[0])), accent]}
-	return {"model": kit.root, "footprint": footprint, "height": height, "flag": flag}
+	return {"model": kit.root, "footprint": footprint, "height": height, "flag": flag, "anchors": anchors}
 
 
 static func _window(kit: ModelKit, glass: Color, trim: Color, at: Vector3, size: Vector2) -> void:

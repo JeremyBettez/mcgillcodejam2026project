@@ -3,16 +3,18 @@ extends RefCounted
 ## Saves the player's world on this device (user://, which is IndexedDB on web):
 ##   user://world.json            {"version": 1, "residents": [{id, name, x, z, created}]}
 ##   user://residents/<id>.glb    a friend's generated model (never the photo)
-##   world.json "places": [{id, name, district, lot, flag, recipe?}] + user://places/<id>.glb
+##   world.json "places": [{id, name, x, z, yaw, flag, recipe?}] + user://places/<id>.glb
 ##     (Quick build places store their "recipe" instead of a GLB)
-##   world.json "layout": {builtin id: {district, lot}} (moved built-in places)
-##   world.json "land": [district id] (every neighbourhood the town has)
+##   world.json "layout": {builtin id: {x, z, yaw}} (where built-in places stand)
+## Version 1 saves placed things by {district, lot} instead of x/z; main.gd
+## still reads those (District.old_lot_position). Neighbourhoods aren't saved:
+## they follow the places.
 ## Every call fails soft: it returns false/empty and the game keeps running.
 
 const INDEX_PATH := "user://world.json"
 const MODEL_DIR := "user://residents"
 const PLACE_DIR := "user://places"
-const VERSION := 1
+const VERSION := 2
 
 
 static func new_id() -> String:
@@ -33,12 +35,12 @@ static func load_index() -> Array[Dictionary]:
 	return entries
 
 
-static func save_index(entries: Array[Dictionary], places: Array[Dictionary] = [], layout: Dictionary = {}, land: Array = []) -> bool:
+static func save_index(entries: Array[Dictionary], places: Array[Dictionary] = [], layout: Dictionary = {}) -> bool:
 	var file := FileAccess.open(INDEX_PATH, FileAccess.WRITE)
 	if file == null:
 		push_warning("WorldStore: can't write world.json (%s)" % error_string(FileAccess.get_open_error()))
 		return false
-	file.store_string(JSON.stringify({"version": VERSION, "residents": entries, "places": places, "layout": layout, "land": land}, "  "))
+	file.store_string(JSON.stringify({"version": VERSION, "residents": entries, "places": places, "layout": layout}, "  "))
 	file.close()
 	return true
 
@@ -69,18 +71,8 @@ static func delete_model(id: String) -> void:
 		DirAccess.remove_absolute(model_path(id))
 
 
-## Neighbourhoods (district ids) the town had, so land the player added (even
-## with no buildings on it yet) comes back.
-static func load_land() -> Array:
-	if not FileAccess.file_exists(INDEX_PATH):
-		return []
-	var data: Variant = JSON.parse_string(FileAccess.get_file_as_string(INDEX_PATH))
-	if data is Dictionary and (data as Dictionary).get("land") is Array:
-		return data.land
-	return []
-
-
-## Where the built-in places were moved to: {location id: {district, lot}}.
+## Where the built-in places stand: {location id: {x, z, yaw}} (or the
+## {district, lot} of version 1 saves).
 static func load_layout() -> Dictionary:
 	if not FileAccess.file_exists(INDEX_PATH):
 		return {}

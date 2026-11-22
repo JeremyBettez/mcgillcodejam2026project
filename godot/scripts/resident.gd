@@ -95,6 +95,7 @@ var _rng := RandomNumberGenerator.new()
 var _face_point: Variant = null # Vector3 to turn toward while performing
 var _act_time := 0.0
 var _recent_sectors: Array[int] = []
+var _pop := 1.0 # avatar scale for the teleport pop (1 = normal)
 
 var _collider: CollisionShape3D
 var _shadow: MeshInstance3D
@@ -627,6 +628,8 @@ func _process(delta: float) -> void:
 		var s := sin(_squash * PI) * 0.5 + _squash * 0.1
 		body_basis = body_basis * Basis.from_scale(Vector3(1.0 + 0.15 * s, 1.0 - 0.22 * s, 1.0 + 0.15 * s))
 		_squash = move_toward(_squash, 0.0, delta * 3.0)
+	if _pop != 1.0:
+		body_basis = body_basis * Basis.from_scale(Vector3.ONE * _pop)
 	avatar_root.transform = Transform3D(body_basis, offset)
 
 	var height := global_position.y
@@ -646,6 +649,23 @@ func _enter_idle() -> void:
 func go_home() -> void:
 	if _state == State.IDLE or _state == State.WALK:
 		_enter_walk()
+
+
+## Jump straight to a spot in the home location (e.g. right after it changes)
+## with a little pop, instead of walking across town. No home: stay put.
+func teleport_home() -> void:
+	if home == null or not is_instance_valid(home) or is_held():
+		return
+	var spot: Dictionary = home.explore_point(_rng, _recent_sectors)
+	global_position = Vector3(spot.point.x, 0.0, spot.point.z)
+	velocity = Vector3.ZERO
+	_fall_velocity = Vector3.ZERO
+	_tumble_speed = 0.0
+	_tumble_angle = 0.0
+	_enter_idle()
+	_pop = 0.2
+	var tween := create_tween()
+	tween.tween_property(self, "_pop", 1.0, 0.35).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 
 func _enter_walk() -> void:

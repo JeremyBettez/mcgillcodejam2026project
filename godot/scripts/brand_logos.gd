@@ -5,6 +5,8 @@ extends RefCounted
 ## - "arches": McDonald's-style golden arches (two parabolic arches).
 ## - "starbucks": a round green badge with a simplified white twin-tailed siren
 ##   (our own simplified drawing of the emblem).
+## - "marianopolis": a navy college shield with a gold rim and a white "M"
+##   (a stand-in emblem, not the college's official logo).
 ## Textures are cached and drawn 2x2 supersampled for smooth edges.
 
 const SIZE := 256
@@ -32,7 +34,14 @@ static func quad(logo: String, width: float) -> MeshInstance3D:
 
 static func texture_for(logo: String) -> ImageTexture:
 	if not _cache.has(logo):
-		var image := _arches() if logo == "arches" else _starbucks()
+		var image: Image
+		match logo:
+			"arches":
+				image = _arches()
+			"marianopolis":
+				image = _marianopolis()
+			_:
+				image = _starbucks()
 		image.generate_mipmaps()
 		_cache[logo] = ImageTexture.create_from_image(image)
 	return _cache[logo]
@@ -122,6 +131,49 @@ static func _starbucks() -> Image:
 			if Geometry2D.is_point_in_polygon(p, fin):
 				return Color.WHITE
 		return green)
+
+
+## Navy shield (flat top, curving to a point) with a gold rim, a thin gold
+## inner line and a bold white block "M". Square image; the shield fills it.
+static func _marianopolis() -> Image:
+	var navy := Color(0.12, 0.23, 0.42)
+	var gold := Color(0.93, 0.76, 0.30)
+	var outer := _shield(1.0)
+	var inner := _shield(0.86)
+	var line := _shield(0.8)
+	var m := PackedVector2Array([
+		Vector2(-0.42, -0.36), Vector2(-0.42, 0.46), Vector2(-0.27, 0.46), Vector2(0.0, 0.08),
+		Vector2(0.27, 0.46), Vector2(0.42, 0.46), Vector2(0.42, -0.36), Vector2(0.28, -0.36),
+		Vector2(0.28, 0.2), Vector2(0.0, -0.18), Vector2(-0.28, 0.2), Vector2(-0.28, -0.36),
+	])
+	return _draw(SIZE, SIZE, func(u: float, v: float) -> Color:
+		var p := Vector2(u, v * 2.0 - 1.0)
+		if not Geometry2D.is_point_in_polygon(p, outer):
+			return Color(0, 0, 0, 0)
+		if not Geometry2D.is_point_in_polygon(p, inner):
+			return gold
+		if Geometry2D.is_point_in_polygon(p, m):
+			return Color.WHITE
+		if not Geometry2D.is_point_in_polygon(p, line):
+			return gold.lerp(navy, 0.35)
+		return navy)
+
+
+## Shield outline scaled by `k` (1 = fills the -1..1 square): straight sides
+## from the top, then curving in to a point at the bottom.
+static func _shield(k: float) -> PackedVector2Array:
+	var points := PackedVector2Array([Vector2(-0.86, 0.92) * k, Vector2(0.86, 0.92) * k, Vector2(0.86, 0.1) * k])
+	for i in range(1, 12):
+		var t := i / 12.0
+		var x := 0.86 * cos(t * PI * 0.5)
+		var y := 0.1 - 1.06 * sin(t * PI * 0.5)
+		points.append(Vector2(x, y) * k)
+	points.append(Vector2(0.0, -0.96) * k)
+	for i in range(11, 0, -1):
+		var t := i / 12.0
+		points.append(Vector2(-0.86 * cos(t * PI * 0.5), 0.1 - 1.06 * sin(t * PI * 0.5)) * k)
+	points.append(Vector2(-0.86, 0.1) * k)
+	return points
 
 
 static func _star_polygon(centre: Vector2, radius: float) -> PackedVector2Array:

@@ -10,11 +10,20 @@ extends Node3D
 ## Debug (desktop): pass `-- --shot=<png path> [--shot-delay=<seconds>]` to save a
 ## screenshot and quit, e.g. for automated checks.
 
-const WORLD_RADIUS := 110.0 # ground disc; covers every district slot
+const WORLD_RADIUS := 400.0 # how far from the middle friends can be thrown or carried
+const GROUND_SIZE := 600.0 # grass square that follows the camera, so the land never ends
+const TOWN_MARGIN := 40.0 # the camera can pan this far past the outermost building
+const PLACE_GAP := 0.6 # each building keeps this much clear ground around its footprint
+const NEW_PLACE_ROOM := Rect2(-5.0, -5.0, 10.0, 10.0) # kept free for a new place's model
+const ROTATE_STEP := PI / 4.0 # one tap on Rotate turns a building this much
 const BLUE := UiStyle.SKY
-const MAX_PLACES := 20 # places the player can add (they fill district lots)
+const MAX_PLACES := 20 # places the player can add (phone performance budget)
 const DEMO_MODEL := "res://demo/resident_demo.glb"
 const DEMO_NAME := "Kevin Tse"
+const DEMO_MODEL_2 := "res://demo/stephen_demo.glb"
+const DEMO_NAME_2 := "Stephen Chen"
+const DEMO_MODEL_3 := "res://demo/jeremy_demo.glb"
+const DEMO_NAME_3 := "Jeremy Bettez"
 const MAX_RESIDENTS := 15 # phone performance budget, demo friend included
 const SAVE_INTERVAL := 15.0
 const HINT := "Drag to look around, pinch to zoom. Tap the camera to add a friend."
@@ -32,7 +41,8 @@ var friends_button: RoundIconButton
 var location_button: RoundIconButton
 var locations := {} # location id -> Location
 var locations_root: Node3D
-var districts := {} # district id -> District
+var districts := {} # district id -> District (only cells that have a place in them)
+var ground: MeshInstance3D
 var thumbnailer: Thumbnailer
 var add_form: AddResidentForm
 var relay: RelayClient
@@ -53,10 +63,11 @@ var _dragged: Resident # friend currently held by the player's finger
 var _grab_candidate: Resident # friend under the finger when it touched down
 var _following: Resident # thrown friend the camera follows until they land
 var _place_candidate: Location # building under the finger at touch-down
-var _moving: Location # building being carried to another plot
+var _moving: Location # building being carried somewhere else
 var _move_from := Vector3.ZERO
 var _move_finger := Vector2(-1.0, -1.0)
-var _drop_target: Array = [] # [District, lot] under the carried building
+var _drop_at := Vector3.ZERO # where the carried building would land
+var _drop_ok := false # ...and whether there is room for it there
 var _drop_marker: MeshInstance3D
 var _last_status := ""
 
@@ -100,9 +111,9 @@ func _ready() -> void:
 	thumbnailer = Thumbnailer.new()
 	add_child(thumbnailer)
 	_build_locations()
-	_restore_land() # neighbourhoods the player added
-	_restore_layout() # built-in places the player moved to other plots
+	_restore_layout() # built-in places the player moved or turned
 	_restore_places() # before friends, so their saved homes can be found
+	_sync_districts() # neighbourhood lawns under every place, camera area
 	_spawn_demo()
 	_restore_world()
 	var autosave := Timer.new()
@@ -133,20 +144,18 @@ func _build_environment() -> void:
 	add_child(sun)
 
 
+## Plain grass that follows the camera (see _process): one colour, so moving
+## it is invisible and the land never runs out.
 func _build_ground() -> void:
-	var grass := MeshInstance3D.new()
-	var disc := CylinderMesh.new()
-	disc.top_radius = WORLD_RADIUS + 2.0
-	disc.bottom_radius = WORLD_RADIUS + 2.0
-	disc.height = 0.2
-	disc.radial_segments = 72
-	disc.rings = 1
-	grass.mesh = disc
-	grass.position.y = -0.1
+	ground = MeshInstance3D.new()
+	ground.name = "Ground"
+	var plane := PlaneMesh.new()
+	plane.size = Vector2(GROUND_SIZE, GROUND_SIZE)
+	ground.mesh = plane
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = Color(0.60, 0.62, 0.32) # late-season golden grass
-	grass.material_override = mat
-	add_child(grass)
+	ground.material_override = mat
+	add_child(ground)
 
 
 func _build_hud() -> void:
@@ -398,74 +407,108 @@ func _build_locations() -> void:
 	locations_root = Node3D.new()
 	locations_root.name = "Locations"
 	add_child(locations_root)
-	# The town is a grid of districts (Montreal neighbourhoods), each a row of
-	# lots facing the camera. The first four hold the built-in places.
-	for i in 4:
-		_add_district(i)
-	_add_builtin("mcgill", "McGill University", McGillModel.build(), McGillModel.FOOTPRINT, "downtown", 8.0)
-	_add_builtin("starbucks", "Starbucks", CafeModels.starbucks(), CafeModels.STARBUCKS_FOOTPRINT, "downtown", 6.0, 15.0)
-	_add_builtin("mcdonalds", "McDonald's", CafeModels.mcdonalds(), CafeModels.MCDONALDS_FOOTPRINT, "downtown", 6.0, 16.0)
-	_add_builtin("oratory", "Saint Joseph's Oratory", OratoryModel.build(), OratoryModel.FOOTPRINT, "cote_des_neiges", 8.0, 30.0)
+	# Places stand anywhere on the open land; these are where the built-in ones
+	# start (the player can move and turn them). Neighbourhood lawns appear
+	# under them by themselves (_sync_districts).
+	_add_builtin("mcgill", "McGill University", McGillModel.build(), McGillModel.FOOTPRINT, Vector3(0, 0, 0), 8.0)
+	_add_builtin("starbucks", "Starbucks", CafeModels.starbucks(), CafeModels.STARBUCKS_FOOTPRINT, Vector3(-12, 0, 0), 6.0, 15.0)
+	_add_builtin("mcdonalds", "McDonald's", CafeModels.mcdonalds(), CafeModels.MCDONALDS_FOOTPRINT, Vector3(12, 0, 0), 6.0, 16.0)
+	_add_builtin("oratory", "Saint Joseph's Oratory", OratoryModel.build(), OratoryModel.FOOTPRINT, Vector3(-40, 0, 0), 8.0, 30.0)
 	var marianopolis := MarianopolisModel.build()
-	_add_builtin("marianopolis", "Marianopolis College", marianopolis.model, marianopolis.footprint, "cote_des_neiges", 8.0,
+	_add_builtin("marianopolis", "Marianopolis College", marianopolis.model, marianopolis.footprint, Vector3(-52, 0, 0), 8.0,
 		clampf(float(marianopolis.height) * 2.4 + 8.0, 15.0, 28.0))
-	_add_builtin("old_port", "Old Port", OldPortModel.build(), OldPortModel.FOOTPRINT, "old_montreal", 8.0, 23.0)
-	_add_builtin("jean_drapeau", "Parc Jean-Drapeau", JeanDrapeauModel.build(), JeanDrapeauModel.FOOTPRINT, "islands", 7.5, 18.0)
+	_add_builtin("old_port", "Old Port", OldPortModel.build(), OldPortModel.FOOTPRINT, Vector3(0, 0, 26), 8.0, 23.0)
+	_add_builtin("jean_drapeau", "Parc Jean-Drapeau", JeanDrapeauModel.build(), JeanDrapeauModel.FOOTPRINT, Vector3(40, 0, 26), 7.5, 18.0)
 
 
-func _add_district(slot: int) -> District:
-	var district := District.new(slot)
-	locations_root.add_child(district)
-	districts[district.district_id] = district
+## Make the neighbourhood lawns match the places: every grid cell with a place
+## in it gets its district, empty ones shrink away. Also tells each place which
+## neighbourhood it is in, and widens the camera's area to the whole town.
+func _sync_districts() -> void:
+	var wanted := {} # district id -> cell
+	for id: String in locations:
+		var place: Location = locations[id]
+		if place.is_queued_for_deletion():
+			continue
+		var cell := District.cell_of(place.position)
+		var info := District.info_for(cell)
+		place.district_id = info.id
+		wanted[info.id] = cell
+	for id: String in wanted:
+		if not districts.has(id):
+			var district := District.new(wanted[id])
+			locations_root.add_child(district)
+			districts[id] = district
+	for id: String in districts.keys():
+		if not wanted.has(id):
+			var district: District = districts[id]
+			districts.erase(id)
+			var tween := create_tween()
+			tween.tween_property(district, "scale", Vector3(0.01, 1.0, 0.01), 0.5).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
+			tween.tween_callback(district.queue_free)
 	_update_camera_bounds()
-	return district
 
 
-## Let the camera pan over every district (plus a margin), and no further.
+## Let the camera pan over the whole town plus TOWN_MARGIN of open land (room
+## to carry buildings further out; the area grows as the town does).
 func _update_camera_bounds() -> void:
 	var bounds := Rect2()
 	var first := true
-	for id: String in districts:
-		var d: District = districts[id]
-		var r := Rect2(Vector2(d.position.x, d.position.z) - Vector2(District.WIDTH, District.DEPTH) * 0.5, Vector2(District.WIDTH, District.DEPTH))
+	for id: String in locations:
+		var place: Location = locations[id]
+		if place.is_queued_for_deletion():
+			continue
+		var r := Rect2(Vector2(place.position.x, place.position.z), Vector2.ZERO)
 		bounds = r if first else bounds.merge(r)
 		first = false
-	camera_rig.bounds = bounds.grow(4.0)
+	camera_rig.bounds = bounds.grow(TOWN_MARGIN)
 
 
-## A free lot for a new place: the first district (in slot order) with room,
-## otherwise a new district. Returns [District, lot] or [] when the town is full.
-func _find_lot() -> Array:
-	# Fill the land the town already has first (in slot order)...
-	for slot in District.SLOTS.size():
-		var district: District = districts.get(District.SLOTS[slot].id)
-		if district and not district.is_queued_for_deletion() and district.free_lot() != -1:
-			return [district, district.free_lot()]
-	# ...then open up the next unused neighbourhood.
-	for slot in District.SLOTS.size():
-		if not districts.has(District.SLOTS[slot].id):
-			var district := _add_district(slot)
-			return [district, district.free_lot()]
-	return []
+## The neighbourhood name for a place (for status lines).
+func _district_name(place: Location) -> String:
+	var district: District = districts.get(place.district_id)
+	return district.display_name if district else str(District.info_for(District.cell_of(place.position)).name)
 
 
-func _put_in_lot(place: Location, district: District, lot: int) -> void:
-	place.district_id = district.district_id
-	place.lot = lot
-	place.position = district.lot_position(lot)
-	place.rotation.y = 0.0 # every front faces the camera (+Z)
-	district.occupy(lot, place.location_id)
+## True if a footprint polygon (world XZ, already grown by PLACE_GAP) touches
+## no other place's footprint (also grown by PLACE_GAP).
+func _spot_free(polygon: PackedVector2Array, ignore: Location = null) -> bool:
+	for id: String in locations:
+		var other: Location = locations[id]
+		if other == ignore or other.is_queued_for_deletion():
+			continue
+		if not Geometry2D.intersect_polygons(polygon, other.world_footprint(PLACE_GAP)).is_empty():
+			return false
+	return true
 
 
-func _add_builtin(id: String, display_name: String, model: Node3D, footprint: Rect2, district_id: String, radius: float, view_distance := 0.0) -> void:
+## The nearest free spot to `near` where `room` (a local footprint, facing +Z)
+## fits, searching outward in rings. Snapped to half metres. Null if none
+## within WORLD_RADIUS (in practice there always is one).
+func _free_spot_near(near: Vector3, room: Rect2) -> Variant:
+	var grown := room.grow(PLACE_GAP)
+	var step := 3.0
+	var ring := 0
+	while ring * step <= WORLD_RADIUS:
+		var radius := ring * step
+		var tries := 1 if ring == 0 else int(TAU * radius / step)
+		for i in tries:
+			var angle := TAU * i / tries
+			var at := Vector3(snappedf(near.x + cos(angle) * radius, 0.5), 0.0, snappedf(near.z + sin(angle) * radius, 0.5))
+			if _spot_free(Location.footprint_polygon(grown, at, 0.0)):
+				return at
+		ring += 1
+	return null
+
+
+func _add_builtin(id: String, display_name: String, model: Node3D, footprint: Rect2, at: Vector3, radius: float, view_distance := 0.0) -> void:
 	var place := Location.new()
 	place.location_id = id
 	place.display_name = display_name
 	place.hangout_radius = radius
 	place.footprint = footprint
 	place.view_distance = view_distance
-	var district: District = districts[district_id]
-	_put_in_lot(place, district, district.free_lot())
+	place.position = at
 	locations_root.add_child(place)
 	place.set_model(model)
 	locations[id] = place
@@ -481,73 +524,7 @@ func _open_locations_list() -> void:
 				count += 1
 		items.append({"text": "%s   ·   %d friend%s" % [place.display_name, count, "" if count == 1 else "s"], "action": _on_location_row.bind(place), "location": place})
 	items.append({"text": "+  Add a location", "action": _open_add_place_form})
-	items.append({"text": "+  Add empty land (3 plots)", "action": _add_land})
-	if not _removable_land().is_empty():
-		items.append({"text": "-  Remove empty land", "action": _open_remove_land_list})
 	_show_list("Locations (%d)" % locations.size(), items)
-
-
-## Neighbourhoods the player can clear: added ones whose plots are all empty.
-func _removable_land() -> Array[District]:
-	var result: Array[District] = []
-	for id: String in districts:
-		var district: District = districts[id]
-		if district.slot >= District.BUILT_IN and district.is_empty() and not district.is_queued_for_deletion():
-			result.append(district)
-	return result
-
-
-func _open_remove_land_list() -> void:
-	var items: Array = []
-	for district in _removable_land():
-		items.append({"text": "Remove %s   ·   3 empty plots" % district.display_name, "action": _remove_land.bind(district)})
-	_show_list("Remove empty land", items)
-
-
-## Clear a neighbourhood with nothing on it: it shrinks away with a golden ring,
-## the camera stops panning over it, and the save forgets it.
-func _remove_land(district: District) -> void:
-	_close_friends_sheet()
-	if not is_instance_valid(district) or not district.is_empty() or district.slot < District.BUILT_IN:
-		hud_status.text = "Only empty land you added can be removed."
-		return
-	districts.erase(district.district_id)
-	_update_camera_bounds()
-	camera_rig.focus_on(district.position + Vector3(0.0, 0.0, 3.0))
-	_ring_burst(district.position)
-	var tween := create_tween()
-	tween.tween_property(district, "scale", Vector3(0.01, 1.0, 0.01), 0.5).set_delay(0.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
-	tween.tween_callback(district.queue_free)
-	_save_world()
-	hud_status.text = "%s was cleared. Add empty land again any time." % district.display_name
-
-
-## Grow the town: the next neighbourhood (District.SLOTS order) appears with
-## three empty plots, the camera flies over and each plot gets a golden ring.
-func _add_land() -> void:
-	_close_friends_sheet()
-	var slot := -1
-	for i in District.SLOTS.size():
-		if not districts.has(District.SLOTS[i].id):
-			slot = i
-			break
-	if slot == -1:
-		hud_status.text = "The town can't grow any bigger. Every neighbourhood is in use."
-		return
-	var district := _add_district(slot)
-	camera_rig.focus_on(district.position + Vector3(0.0, 0.0, 3.0))
-	camera_rig.view_from(district.position + Vector3(0.0, 0.0, 3.0), Vector3.BACK, 0.0, 34.0)
-	for lot in District.LOTS.size():
-		get_tree().create_timer(0.6 + 0.25 * lot).timeout.connect(_ring_burst.bind(district.lot_position(lot)))
-	_save_world()
-	hud_status.text = "New land in %s: 3 empty plots ready. Add a location or move a building there." % district.display_name
-
-
-func _restore_land() -> void:
-	for id: Variant in WorldStore.load_land():
-		var slot := District.slot_index(str(id))
-		if slot != -1 and not districts.has(str(id)):
-			_add_district(slot)
 
 
 func _on_location_row(place: Location) -> void:
@@ -576,8 +553,8 @@ func _fly_to_place(place: Location) -> void:
 	camera_rig.view_from(place.global_position + front.normalized() * 1.0, front.normalized(), deg_to_rad(-26.0), distance)
 
 
-## Bar for a location: Retry/Remove while its model failed, Remove for places
-## the player added. Built-in places have nothing to do, so no bar.
+## Bar for a location: Retry/Remove while its model failed; otherwise Rotate,
+## plus Remove for places the player added.
 func _show_place_actions(place: Location) -> void:
 	_hide_actions()
 	var job: int = place.get_meta("job", 0)
@@ -587,9 +564,32 @@ func _show_place_actions(place: Location) -> void:
 			_show_actions("Couldn't build %s: %s" % [place.display_name, error],
 				[["Remove", _discard_job.bind(job)], ["Retry", _retry_job.bind(job)]])
 		return
+	var buttons: Array = [["Rotate", _rotate_place.bind(place)]]
 	if place.user_added:
-		var made := _show_actions(place.display_name, [["Remove place", _remove_place.bind(place)]])
-		_remove_button = made[0]
+		buttons.append(["Remove place", _remove_place.bind(place)])
+	var made := _show_actions("%s · hold to move it" % place.display_name, buttons)
+	if place.user_added:
+		_remove_button = made[1]
+
+
+## Turn a building by ROTATE_STEP, if it has room to turn where it stands.
+func _rotate_place(place: Location) -> void:
+	if not is_instance_valid(place) or place == _moving:
+		return
+	var from := place.rotation.y
+	var to := from + ROTATE_STEP
+	if not _spot_free(place.world_footprint(PLACE_GAP, place.position, to), place):
+		hud_status.text = "%s has no room to turn here. Hold it to move it first." % place.display_name
+		return
+	var tween := create_tween()
+	tween.tween_property(place, "rotation:y", to, 0.35).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	tween.tween_callback(func() -> void:
+		place.rotation.y = wrapf(to, -PI, PI)
+		_save_world())
+	for friend in _friends():
+		if friend.home == place:
+			friend.go_home()
+	hud_status.text = "%s turned." % place.display_name
 
 
 func _open_add_place_form() -> void:
@@ -609,13 +609,14 @@ func _user_place_count() -> int:
 	return count
 
 
-func _make_place(id: String, display_name: String, district: District, lot: int) -> Location:
+func _make_place(id: String, display_name: String, at: Vector3, yaw := 0.0) -> Location:
 	var place := Location.new()
 	place.location_id = id
 	place.display_name = display_name
 	place.hangout_radius = 7.0
 	place.user_added = true
-	_put_in_lot(place, district, lot)
+	place.position = at
+	place.rotation.y = yaw
 	locations_root.add_child(place)
 	locations[id] = place
 	return place
@@ -624,11 +625,14 @@ func _make_place(id: String, display_name: String, district: District, lot: int)
 ## `detailed`: Detailed 3D (TRELLIS mesh) instead of the default Quick build
 ## (Claude describes the photo as a recipe, RecipeModel builds it in code).
 func _on_place_submitted(display_name: String, jpeg: PackedByteArray, wants_flag: bool, detailed := false) -> void:
-	var spot := _find_lot()
-	if spot.is_empty():
+	# The nearest open ground to where you are looking.
+	var focus := camera_rig.position
+	var spot: Variant = _free_spot_near(Vector3(focus.x, 0.0, focus.z), NEW_PLACE_ROOM)
+	if spot == null:
 		hud_status.text = "There's no room left in town for another place."
 		return
-	var place := _make_place(WorldStore.new_id(), display_name, spot[0], spot[1])
+	var place := _make_place(WorldStore.new_id(), display_name, spot)
+	_sync_districts()
 	# Flag: a known design for the name, otherwise colours from the photo.
 	if wants_flag:
 		var known: Variant = Flag.design_for_name(display_name)
@@ -663,12 +667,10 @@ func _delete_place(place: Location) -> void:
 		if friend.home == place:
 			friend.home = null # they wander the whole map again
 	locations.erase(place.location_id)
-	var district: District = districts.get(place.district_id)
-	if district:
-		district.release(place.location_id) # the lot shows as free again
 	if place.user_added:
 		WorldStore.delete_place_model(place.location_id)
 	place.queue_free()
+	_sync_districts() # its neighbourhood goes if nothing else stands there
 	_hide_actions()
 	_save_world()
 	hud_status.text = "%s was removed from the map." % place.display_name
@@ -684,28 +686,29 @@ func _restore_places() -> void:
 			if model == null:
 				push_warning("Skipping saved place %s: model unreadable" % id)
 				continue
-		# Back into its saved lot (creating its district); older saves, or a
-		# lot that is somehow taken, just get the next free lot.
-		var spot := []
-		var slot := District.slot_index(str(entry.get("district", "")))
-		if slot != -1:
-			var district: District = districts.get(District.SLOTS[slot].id)
-			if district == null:
-				district = _add_district(slot)
-			if district.is_free(int(entry.get("lot", -1))):
-				spot = [district, int(entry.get("lot", -1))]
-		if spot.is_empty():
-			spot = _find_lot()
-		if spot.is_empty():
-			push_warning("Skipping saved place %s: the town is full" % id)
+		# Back where it stood; saves from before free placement have only a
+		# district and lot; failing both, the nearest open ground.
+		var spot: Variant = _saved_spot(entry)
+		if spot == null:
+			spot = _free_spot_near(Vector3.ZERO, NEW_PLACE_ROOM)
+		if spot == null:
+			push_warning("Skipping saved place %s: no room" % id)
 			continue
-		var place := _make_place(id, str(entry.get("name", "Place")), spot[0], spot[1])
+		var place := _make_place(id, str(entry.get("name", "Place")), spot, float(entry.get("yaw", 0.0)))
 		place.flag_design = _flag_from_json(entry.get("flag"))
 		if recipe is Dictionary:
 			place.set_recipe_model(RecipeModel.build(recipe))
 			place.set_meta("recipe", recipe)
 		else:
 			place.set_generated_model(model)
+
+
+## Where a saved place (or built-in layout entry) stood: {x, z}, or the
+## {district, lot} older saves used. Null if neither is there.
+static func _saved_spot(entry: Dictionary) -> Variant:
+	if entry.has("x") and entry.has("z"):
+		return Vector3(float(entry.x), 0.0, float(entry.z))
+	return District.old_lot_position(str(entry.get("district", "")), int(entry.get("lot", -1)))
 
 
 static func _flag_to_json(design: Variant) -> Variant:
@@ -748,7 +751,9 @@ func _set_home(friend: Resident, place: Location) -> void:
 	if not is_instance_valid(friend):
 		return
 	friend.home = place
-	friend.go_home()
+	friend.teleport_home() # pop straight there instead of walking across town
+	if place:
+		camera_rig.focus_on(friend.global_position)
 	_save_world()
 	hud_status.text = "%s now hangs out at %s." % [friend.display_name, place.display_name] if place else "%s can wander anywhere now." % friend.display_name
 
@@ -1022,18 +1027,16 @@ func _save_world() -> void:
 				"x": snappedf(place.position.x, 0.01),
 				"z": snappedf(place.position.z, 0.01),
 				"yaw": snappedf(place.rotation.y, 0.001),
-				"district": place.district_id,
-				"lot": place.lot,
 				"flag": _flag_to_json(place.flag_design),
 				"recipe": place.get_meta("recipe") if place.has_meta("recipe") else null,
 			})
-	# Built-in places that were moved: which plot each one is on now.
+	# Built-in places: where each one stands now and how it is turned.
 	var layout := {}
 	for id: String in locations:
 		var place: Location = locations[id]
 		if not place.user_added and not place.is_queued_for_deletion():
-			layout[id] = {"district": place.district_id, "lot": place.lot}
-	if not WorldStore.save_index(entries, places, layout, districts.keys()):
+			layout[id] = {"x": snappedf(place.position.x, 0.01), "z": snappedf(place.position.z, 0.01), "yaw": snappedf(place.rotation.y, 0.001)}
+	if not WorldStore.save_index(entries, places, layout):
 		_warn_storage()
 
 
@@ -1106,10 +1109,27 @@ func _spawn_demo() -> void:
 	var at := mcgill.random_point(rng) if mcgill else Vector3.ZERO
 	var kevin := spawn_resident(DEMO_NAME, model, at)
 	kevin.home = mcgill
+	# A second built-in friend: Stephen Chen (IDOL splat converted with
+	# scripts/splat_to_glb.py), also at McGill. Skipped if his model is missing.
+	var stephen_model := GlbLoader.from_file(DEMO_MODEL_2)
+	if stephen_model:
+		var stephen := spawn_resident(DEMO_NAME_2, stephen_model, mcgill.random_point(rng) if mcgill else Vector3(1.5, 0.0, 1.5))
+		stephen.home = mcgill
+	# Third built-in friend: Jeremy Bettez (same conversion), also at McGill.
+	var jeremy_model := GlbLoader.from_file(DEMO_MODEL_3)
+	if jeremy_model:
+		var jeremy := spawn_resident(DEMO_NAME_3, jeremy_model, mcgill.random_point(rng) if mcgill else Vector3(-1.5, 0.0, 1.5))
+		jeremy.home = mcgill
 
 
 func _on_tapped(screen_pos: Vector2) -> void:
-	_select(_resident_at(screen_pos))
+	var friend := _resident_at(screen_pos)
+	_select(friend)
+	# Tapping a building shows what you can do with it (Rotate, Remove).
+	if friend == null:
+		var place := _place_at(screen_pos)
+		if place:
+			_show_place_actions(place)
 
 
 ## The friend under a screen point, or null.
@@ -1135,10 +1155,9 @@ func _ground_point(screen_pos: Vector2) -> Variant:
 	return Vector3(flat.x, 0.0, flat.y)
 
 
-# --- Moving buildings to other plots -------------------------------------------
+# --- Moving buildings anywhere on the land -------------------------------------
 
 const CARRY_HEIGHT := 0.9 # a carried building floats this high
-const DROP_RANGE := 9.0 # metres from a lot's centre that still counts as on it
 const EDGE_PAN := 70.0 # pixels from the screen edge that pan the view
 const EDGE_PAN_SPEED := 16.0 # m/s at the very edge
 
@@ -1161,28 +1180,27 @@ func _start_move(place: Location) -> void:
 	_hide_actions()
 	_moving = place
 	_move_from = place.global_position
+	_drop_at = _move_from
+	_drop_ok = true
 	_set_walls_enabled(place, false) # don't shove friends around mid-air
 	if _drop_marker == null:
 		_drop_marker = MeshInstance3D.new()
-		var disc := CylinderMesh.new()
-		disc.top_radius = 5.0
-		disc.bottom_radius = 5.0
-		disc.height = 0.03
-		disc.radial_segments = 40
-		disc.rings = 1
-		_drop_marker.mesh = disc
 		var mat := StandardMaterial3D.new()
 		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		mat.albedo_color = Color(UiStyle.YELLOW, 0.5)
 		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 		_drop_marker.material_override = mat
 		locations_root.add_child(_drop_marker)
+	# The marker is the building's footprint (plus its clear ground) on the grass.
+	var slab := BoxMesh.new()
+	var area := place.footprint.grow(PLACE_GAP)
+	slab.size = Vector3(area.size.x, 0.03, area.size.y)
+	_drop_marker.mesh = slab
 	_drop_marker.visible = false
-	hud_status.text = "Drag %s to another plot. Drop it on a building to swap them." % place.display_name
+	hud_status.text = "Drag %s anywhere with room. Let go to put it down." % place.display_name
 
 
 ## Each frame while carrying: pan at the screen edges, float the building under
-## the finger, and highlight the plot it would land on.
+## the finger, and show where it would land: yellow if it fits, red if not.
 func _carry_step(delta: float) -> void:
 	if not is_instance_valid(_moving):
 		_moving = null
@@ -1199,26 +1217,15 @@ func _carry_step(delta: float) -> void:
 	if point is Vector3:
 		var goal := Vector3((point as Vector3).x, CARRY_HEIGHT, (point as Vector3).z)
 		_moving.global_position = _moving.global_position.lerp(goal, 1.0 - exp(-14.0 * delta))
-	_drop_target = _nearest_lot(_moving.global_position)
-	_drop_marker.visible = not _drop_target.is_empty()
-	if _drop_marker.visible:
-		var district: District = _drop_target[0]
-		_drop_marker.global_position = district.lot_position(_drop_target[1]) + Vector3(0.0, 0.02 + 0.01 * sin(Time.get_ticks_msec() * 0.008), 0.0)
-
-
-## The lot (in any district) nearest to a point, within DROP_RANGE: [District, lot] or [].
-func _nearest_lot(point: Vector3) -> Array:
-	var best: Array = []
-	var best_d := DROP_RANGE
-	for id: String in districts:
-		var district: District = districts[id]
-		for lot in District.LOTS.size():
-			var at := district.lot_position(lot)
-			var d := Vector2(at.x - point.x, at.z - point.z).length()
-			if d < best_d:
-				best_d = d
-				best = [district, lot]
-	return best
+	var here := _moving.global_position
+	_drop_at = Vector3(snappedf(here.x, 0.5), 0.0, snappedf(here.z, 0.5))
+	_drop_ok = _spot_free(_moving.world_footprint(PLACE_GAP, _drop_at), _moving)
+	_drop_marker.visible = true
+	var turn := Basis(Vector3.UP, _moving.rotation.y)
+	var centre := _moving.footprint.grow(PLACE_GAP).get_center()
+	_drop_marker.global_transform = Transform3D(turn, _drop_at + turn * Vector3(centre.x, 0.0, centre.y)
+		+ Vector3(0.0, 0.02 + 0.01 * sin(Time.get_ticks_msec() * 0.008), 0.0))
+	(_drop_marker.material_override as StandardMaterial3D).albedo_color = Color(UiStyle.YELLOW, 0.5) if _drop_ok else Color(0.9, 0.3, 0.25, 0.5)
 
 
 func _finish_move() -> void:
@@ -1230,45 +1237,22 @@ func _finish_move() -> void:
 	if not is_instance_valid(place):
 		return
 	var lifted := place.global_position
-	var target := _drop_target
-	_drop_target = []
-	if target.is_empty() or (target[0] as District).district_id == place.district_id and int(target[1]) == place.lot:
+	var from_flat := Vector3(_move_from.x, 0.0, _move_from.z)
+	if not _drop_ok or _drop_at.distance_to(from_flat) < 0.3:
 		_glide(place, lifted, _move_from)
 		_set_walls_enabled(place, true)
-		hud_status.text = "%s stays where it was." % place.display_name
+		hud_status.text = ("%s stays where it was." if _drop_ok else "No room there, so %s went back.") % place.display_name
 		return
-	var district: District = target[0]
-	var other_id: String = district.occupants[int(target[1])]
-	var other: Location = locations.get(other_id)
-	var other_from := other.global_position if other else Vector3.ZERO
-	_relocate(place, district, int(target[1]))
-	_glide(place, lifted, place.global_position, true)
+	place.position = _drop_at
+	_sync_districts()
+	_save_world() # before the landing animation moves it through the air
+	_glide(place, lifted, _drop_at, true)
 	_set_walls_enabled(place, true)
-	if other:
-		_glide(other, other_from, other.global_position, true)
-		hud_status.text = "%s and %s swapped plots." % [place.display_name, other.display_name]
-	else:
-		hud_status.text = "%s moved to %s." % [place.display_name, district.display_name]
+	hud_status.text = "%s moved to %s." % [place.display_name, _district_name(place)]
 	# Friends who hang out there head to the new spot.
 	for friend in _friends():
-		if friend.home == place or (other and friend.home == other):
+		if friend.home == place:
 			friend.go_home()
-	_save_world()
-
-
-## Put `place` on a lot; if another place is there, it swaps onto `place`'s old lot.
-func _relocate(place: Location, district: District, lot: int) -> void:
-	var old_district: District = districts.get(place.district_id)
-	var old_lot := place.lot
-	var other_id: String = district.occupants[lot]
-	if old_district:
-		old_district.release(place.location_id)
-	if not other_id.is_empty() and other_id != place.location_id:
-		district.release(other_id)
-		var other: Location = locations.get(other_id)
-		if other and old_district:
-			_put_in_lot(other, old_district, old_lot)
-	_put_in_lot(place, district, lot)
 
 
 ## Animate a building from `from` to where it now belongs (`to`), landing with a
@@ -1350,7 +1334,7 @@ func _set_walls_enabled(place: Location, on: bool) -> void:
 		(body as StaticBody3D).collision_layer = 1 if on else 0
 
 
-## Move built-in places back to the plots the player put them on.
+## Put built-in places back where the player moved and turned them.
 func _restore_layout() -> void:
 	var layout := WorldStore.load_layout()
 	for id: String in layout:
@@ -1358,15 +1342,10 @@ func _restore_layout() -> void:
 		var entry: Variant = layout[id]
 		if place == null or place.user_added or not entry is Dictionary:
 			continue
-		var slot := District.slot_index(str(entry.get("district", "")))
-		var lot := int(entry.get("lot", -1))
-		if slot == -1 or lot < 0 or lot >= District.LOTS.size():
-			continue
-		var district: District = districts.get(District.SLOTS[slot].id)
-		if district == null:
-			district = _add_district(slot)
-		if district.district_id != place.district_id or lot != place.lot:
-			_relocate(place, district, lot)
+		var spot: Variant = _saved_spot(entry)
+		if spot is Vector3:
+			place.position = spot
+			place.rotation.y = float((entry as Dictionary).get("yaw", 0.0))
 
 
 # --- Picking friends up -------------------------------------------------------
@@ -1434,6 +1413,9 @@ func _on_grab_ended(_screen_pos: Vector2) -> void:
 
 
 func _process(delta: float) -> void:
+	# The grass follows the view, so there is always land under it.
+	var view := camera_rig.position
+	ground.position = Vector3(view.x, 0.0, view.z)
 	if _moving:
 		_carry_step(delta)
 	# Animate the status line whenever its message changes.

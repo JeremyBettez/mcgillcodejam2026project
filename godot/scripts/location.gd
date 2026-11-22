@@ -25,10 +25,9 @@ var hangout_radius := 6.0
 var footprint := Rect2(Vector2(-1.0, -1.0), Vector2(2.0, 2.0))
 ## Camera distance when flying here from the Locations list (0 = fit the footprint).
 var view_distance := 0.0
-var user_added := false
-## Where it sits in the town: District id and lot index (see District).
+var user_added := false # added by the player (saved, removable)
+## The neighbourhood it stands in (District id; follows its position).
 var district_id := ""
-var lot := -1 # added by the player (saved, removable)
 var flag_design: Variant = null # null, "mcgill", or {"colors": [field, accent]}
 ## Second line on the name sign, e.g. "building 3D..." while generating.
 var status_text := "":
@@ -181,9 +180,29 @@ func random_point(rng: RandomNumberGenerator) -> Vector3:
 	return to_global(Vector3(0.0, 0.0, footprint.end.y + 1.5))
 
 
-## Parts of the hangout area friends explore: sectors around the building's
-## sides and front (local angle atan2(z, x); front = +Z = 90 deg). The back
-## is left out, since the fixed camera can't see behind a building.
+## The footprint as a world-space XZ polygon (follows position and turning),
+## grown by `margin` metres. `at`/`yaw` test a spot before moving there.
+func world_footprint(margin := 0.0, at: Variant = null, yaw: Variant = null) -> PackedVector2Array:
+	var centre: Vector3 = global_position if at == null else at
+	var turn: float = rotation.y if yaw == null else yaw
+	return footprint_polygon(footprint.grow(margin), centre, turn)
+
+
+## A local XZ rectangle placed at `centre`, turned by `yaw` (around +Y), as a
+## world XZ polygon.
+static func footprint_polygon(rect: Rect2, centre: Vector3, yaw: float) -> PackedVector2Array:
+	var basis := Basis(Vector3.UP, yaw)
+	var result := PackedVector2Array()
+	for corner in [rect.position, Vector2(rect.end.x, rect.position.y), rect.end, Vector2(rect.position.x, rect.end.y)]:
+		var w: Vector3 = centre + basis * Vector3(corner.x, 0.0, corner.y)
+		result.append(Vector2(w.x, w.z))
+	return result
+
+
+## Parts of the hangout area friends explore: sectors around the building
+## (world angle atan2(z, x); towards the camera = +Z = 90 deg). The far side
+## is left out, since the fixed camera can't see behind a building. Angles are
+## in world space, so a turned building still gets explored on the side you see.
 const EXPLORE_FROM := deg_to_rad(-25.0)
 const EXPLORE_TO := deg_to_rad(205.0)
 const EXPLORE_SECTORS := 6
@@ -207,9 +226,10 @@ func explore_point(rng: RandomNumberGenerator, recent: Array[int]) -> Dictionary
 	for attempt in 16:
 		var angle := EXPLORE_FROM + width * (sector + rng.randf())
 		var dist := lerpf(hangout_radius * 0.35, hangout_radius * 0.95, sqrt(rng.randf()))
-		var local := Vector2(cos(angle), sin(angle)) * dist
-		if not grown.has_point(local):
-			return {"point": to_global(Vector3(local.x, 0.0, local.y)), "sector": sector}
+		var offset := Vector2(cos(angle), sin(angle)) * dist # world XZ, from the centre
+		var local := to_local(global_position + Vector3(offset.x, 0.0, offset.y))
+		if not grown.has_point(Vector2(local.x, local.z)):
+			return {"point": global_position + Vector3(offset.x, 0.0, offset.y), "sector": sector}
 	return {"point": random_point(rng), "sector": sector}
 
 
