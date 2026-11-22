@@ -436,14 +436,16 @@ func _update_camera_bounds() -> void:
 ## A free lot for a new place: the first district (in slot order) with room,
 ## otherwise a new district. Returns [District, lot] or [] when the town is full.
 func _find_lot() -> Array:
+	# Fill the land the town already has first (in slot order)...
 	for slot in District.SLOTS.size():
-		var id: String = District.SLOTS[slot].id
-		var district: District = districts.get(id)
-		if district == null:
-			district = _add_district(slot)
-		var lot := district.free_lot()
-		if lot != -1:
-			return [district, lot]
+		var district: District = districts.get(District.SLOTS[slot].id)
+		if district and not district.is_queued_for_deletion() and district.free_lot() != -1:
+			return [district, district.free_lot()]
+	# ...then open up the next unused neighbourhood.
+	for slot in District.SLOTS.size():
+		if not districts.has(District.SLOTS[slot].id):
+			var district := _add_district(slot)
+			return [district, district.free_lot()]
 	return []
 
 
@@ -480,7 +482,44 @@ func _open_locations_list() -> void:
 		items.append({"text": "%s   ·   %d friend%s" % [place.display_name, count, "" if count == 1 else "s"], "action": _on_location_row.bind(place), "location": place})
 	items.append({"text": "+  Add a location", "action": _open_add_place_form})
 	items.append({"text": "+  Add empty land (3 plots)", "action": _add_land})
+	if not _removable_land().is_empty():
+		items.append({"text": "-  Remove empty land", "action": _open_remove_land_list})
 	_show_list("Locations (%d)" % locations.size(), items)
+
+
+## Neighbourhoods the player can clear: added ones whose plots are all empty.
+func _removable_land() -> Array[District]:
+	var result: Array[District] = []
+	for id: String in districts:
+		var district: District = districts[id]
+		if district.slot >= District.BUILT_IN and district.is_empty() and not district.is_queued_for_deletion():
+			result.append(district)
+	return result
+
+
+func _open_remove_land_list() -> void:
+	var items: Array = []
+	for district in _removable_land():
+		items.append({"text": "Remove %s   ·   3 empty plots" % district.display_name, "action": _remove_land.bind(district)})
+	_show_list("Remove empty land", items)
+
+
+## Clear a neighbourhood with nothing on it: it shrinks away with a golden ring,
+## the camera stops panning over it, and the save forgets it.
+func _remove_land(district: District) -> void:
+	_close_friends_sheet()
+	if not is_instance_valid(district) or not district.is_empty() or district.slot < District.BUILT_IN:
+		hud_status.text = "Only empty land you added can be removed."
+		return
+	districts.erase(district.district_id)
+	_update_camera_bounds()
+	camera_rig.focus_on(district.position + Vector3(0.0, 0.0, 3.0))
+	_ring_burst(district.position)
+	var tween := create_tween()
+	tween.tween_property(district, "scale", Vector3(0.01, 1.0, 0.01), 0.5).set_delay(0.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
+	tween.tween_callback(district.queue_free)
+	_save_world()
+	hud_status.text = "%s was cleared. Add empty land again any time." % district.display_name
 
 
 ## Grow the town: the next neighbourhood (District.SLOTS order) appears with

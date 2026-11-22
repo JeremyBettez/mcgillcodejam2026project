@@ -12,7 +12,11 @@ const FILL_ORDER := [1, 0, 2]
 const WIDTH := 36.0
 const DEPTH := 20.0
 
-## Grid of district slots (Montreal neighbourhoods). The first four always exist.
+## The first BUILT_IN slots always exist (they hold the built-in places); later
+## ones are added by the player or as the town fills up, and can be removed
+## again while all their plots are empty.
+const BUILT_IN := 4
+## Grid of district slots (Montreal neighbourhoods).
 const SLOTS := [
 	{"id": "downtown", "name": "Downtown", "at": Vector3(0, 0, 0), "tint": Color(0.64, 0.64, 0.35)},
 	{"id": "old_montreal", "name": "Old Montréal", "at": Vector3(0, 0, 26), "tint": Color(0.67, 0.61, 0.36)},
@@ -103,6 +107,14 @@ func free_lot() -> int:
 		if occupants[lot].is_empty():
 			return lot
 	return -1
+
+
+## True if no place stands on any of its plots.
+func is_empty() -> bool:
+	for id in occupants:
+		if not id.is_empty():
+			return false
+	return true
 
 
 func is_free(lot: int) -> bool:
