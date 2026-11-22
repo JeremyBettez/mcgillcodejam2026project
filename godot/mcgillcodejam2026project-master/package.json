@@ -1,0 +1,19 @@
+{
+  "name": "photo-town",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "anigen": "node --env-file-if-exists=.env.local scripts/anigen-test.mjs",
+    "export:web": "node scripts/export-web.mjs",
+    "relay": "node scripts/run-relay.mjs",
+    "relay:test": "node scripts/run-relay.mjs --test",
+    "serve:lan": "vite --host --mode lan",
+    "serve": "vite"
+  },
+  "devDependencies": {
+    "@gradio/client": "2.7.2",
+    "@vitejs/plugin-basic-ssl": "2.3.0",
+    "vite": "8.3.6"
+  }
+}

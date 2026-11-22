@@ -88,7 +88,18 @@ def build_skeleton(p):
     cz = float(np.median(torso[:, 2]))
     leg_x = {s: np.median(legs[(legs[:, 0] - cx) * s > 0][:, 0]) for s in (-1, 1)}
     waist = p[(p[:, 1] > ymin + 0.56 * h) & (p[:, 1] < ymin + 0.62 * h)]
-    torso_half = float(np.percentile(np.abs(waist[:, 0] - cx), 90))
+    # Torso half-width: walk out from the centre while the waist band is
+    # occupied, so hands hanging by the hips (A-pose) don't count as torso.
+    bin_w = 0.004 * h
+    occupied = set(np.floor((waist[:, 0] - cx) / bin_w).astype(int).tolist())
+    edges = []
+    for step in (1, -1):
+        k = 0
+        while (k + step) in occupied or (k + 2 * step) in occupied:
+            k += step
+        edges.append(abs(k) * bin_w)
+    torso_half = float(min(max(edges), np.percentile(np.abs(waist[:, 0] - cx), 90)))
+    print(f'torso half-width {torso_half / h:.3f} h')
     shoulder_y = ymin + 0.80 * h
     arms = {}
     for s in (-1, 1):
@@ -147,7 +158,68 @@ def bone_segments(joints, h):
     return segs
 
 
-def skin(points, joints, h, info):
+def mesh_graph(verts, faces):
+    """Sparse, symmetric vertex adjacency weighted by edge length."""
+    from scipy import sparse
+    e = np.concatenate([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]]).astype(np.int64)
+    w = np.linalg.norm(verts[e[:, 0]] - verts[e[:, 1]], axis=1) + 1e-9
+    g = sparse.coo_matrix((w, (e[:, 0], e[:, 1])), shape=(len(verts), len(verts))).tocsr()
+    return g.maximum(g.T)
+
+
+def drop_small_pieces(verts, faces, *extra):
+    """Keep only the biggest connected piece (cuts can leave slivers) and drop
+    unused vertices. `extra` per-vertex arrays are compacted alongside."""
+    from scipy.sparse import csgraph
+    count, comp = csgraph.connected_components(mesh_graph(verts, faces), directed=False)
+    if count > 1:
+        face_comp = comp[faces[:, 0]]
+        biggest = np.argmax(np.bincount(face_comp))
+        print(f'dropped {int((face_comp != biggest).sum())} triangles in {count - 1} loose pieces')
+        faces = faces[face_comp == biggest]
+    used = np.unique(faces)
+    remap = np.full(len(verts), -1, np.int64)
+    remap[used] = np.arange(len(used))
+    return (verts[used], remap[faces].astype(np.uint32)) + tuple(a[used] for a in extra)
+
+
+def geodesic_skin(verts, faces, dist, smooth=8):
+    """Weights that follow the surface: vertices clearly next to one bone seed
+    it, every other vertex takes the bone of the nearest seed *along the mesh*
+    (so a forearm near the hip stays with the arm), then the one-hot labels
+    are diffused a few steps over the mesh for soft joints. Top 4 kept."""
+    from scipy.sparse import csgraph, diags
+    n, count = dist.shape
+    order = np.argsort(dist, axis=1)
+    d1 = dist[np.arange(n), order[:, 0]]
+    d2 = dist[np.arange(n), order[:, 1]]
+    seeds = np.where(np.isfinite(d1) & (d1 < 0.6 * d2))[0]
+    g = mesh_graph(verts, faces)
+    label = order[:, 0].copy()
+    if len(seeds):
+        _d, _pred, src = csgraph.dijkstra(g, directed=False, indices=seeds, min_only=True,
+                                          return_predecessors=True)
+        reached = src >= 0
+        label[reached] = order[src[reached], 0]
+    w = np.zeros((n, count), np.float32)
+    w[np.arange(n), label] = 1.0
+    allowed = np.isfinite(dist)
+    allowed[~allowed.any(1)] = True
+    w[~allowed[np.arange(n), label]] = 1.0 / count
+    adj = (g > 0).astype(np.float32)
+    inv_deg = diags(1.0 / np.maximum(np.asarray(adj.sum(1)).ravel(), 1.0))
+    for _ in range(smooth):
+        w = 0.5 * w + 0.5 * (inv_deg @ (adj @ w))
+        w *= allowed
+        w /= np.maximum(w.sum(1, keepdims=True), 1e-9)
+    top = np.argsort(-w, axis=1)[:, :4]
+    tw = np.take_along_axis(w, top, 1)
+    tw[tw < 0.02] = 0.0
+    tw /= np.maximum(tw.sum(1, keepdims=True), 1e-9)
+    return top.astype(np.uint8), tw.astype(np.float32)
+
+
+def skin(points, joints, h, info, return_dist=False):
     segs = bone_segments(joints, h)
     dist = np.empty((len(points), len(segs)))
     for k, (a, b) in enumerate(segs):
@@ -173,6 +245,14 @@ def skin(points, joints, h, info):
         # up with a raised arm).
         inside = np.abs(points[:, 0] - cx) <= torso_half * 0.75
         dist[np.ix_(inside, arm)] = np.inf
+    # Legs never borrow the other leg's bones (inner thighs and touching knees).
+    for side, sign in (('r', -1), ('l', 1)):
+        other = 'l' if side == 'r' else 'r'
+        other_leg = [names.index(f'{b}_{other}') for b in ('hip', 'knee', 'ankle', 'toe')]
+        this_side = ((points[:, 0] - cx) * sign > 0) & near_legs
+        dist[np.ix_(this_side, other_leg)] = np.inf
+    if return_dist:
+        return dist
     order = np.argsort(dist, axis=1)[:, :2]
     d1 = np.take_along_axis(dist, order[:, :1], 1)[:, 0]
     d2 = np.take_along_axis(dist, order[:, 1:2], 1)[:, 0]
@@ -237,89 +317,154 @@ def make_mesh(pos, rgb):
     return verts, faces.astype(np.uint32), normals, cols
 
 
-def paint_view(pos, rgb, axis, toward, box, width, height):
-    """Orthographic picture of the splat seen along `axis` (0 = X, 2 = Z) from
-    the `toward` side (-1 = from the negative side): the picture's horizontal
-    is the other horizontal axis. Nearest splat wins per pixel, each splat
-    covers a small footprint, then holes are filled from their neighbours."""
+SURFACE_TOL = 0.012 # splats this far behind the nearest one still count as the visible surface
+VISIBLE_TOL = 0.03 # a triangle this far behind the view's surface is hidden from that view
+
+
+def view_pixels(points, axis, toward, box, width, height):
+    """Pixel coordinates and depth (smaller = nearer) of points in one view."""
     (umin, ymin), (umax, ymax) = box
     across = 2 if axis == 0 else 0
-    px = ((pos[:, across] - umin) / (umax - umin) * (width - 1)).round().astype(int)
-    py = ((ymax - pos[:, 1]) / (ymax - ymin) * (height - 1)).round().astype(int)
-    depth = pos[:, axis] * (1 if toward < 0 else -1) # smaller = nearer the viewer
-    order = np.argsort(-depth) # far first, so nearer splats overwrite them
-    img = np.zeros((height, width, 3), np.float32)
-    zbuf = np.full((height, width), np.inf, np.float32)
-    filled = np.zeros((height, width), bool)
-    for dy in (-1, 0, 1):
-        for dx in (-1, 0, 1):
-            x = np.clip(px[order] + dx, 0, width - 1)
-            y = np.clip(py[order] + dy, 0, height - 1)
-            d = depth[order] + (0.002 if (dx or dy) else 0.0) # centre pixel beats neighbours' spill
-            nearer = d < zbuf[y, x]
-            # Later (nearer) writes win where several splats land on one pixel.
-            img[y[nearer], x[nearer]] = rgb[order][nearer]
-            zbuf[y[nearer], x[nearer]] = d[nearer]
-            filled[y[nearer], x[nearer]] = True
+    px = ((points[:, across] - umin) / (umax - umin) * (width - 1)).round().astype(int).clip(0, width - 1)
+    py = ((ymax - points[:, 1]) / (ymax - ymin) * (height - 1)).round().astype(int).clip(0, height - 1)
+    depth = points[:, axis] * (1 if toward < 0 else -1)
+    return px, py, depth
+
+
+def paint_view(pos, rgb, axis, toward, box, width, height):
+    """Orthographic picture of the splat seen along `axis` (0 = X, 2 = Z) from
+    the `toward` side (-1 = from the negative side). Each pixel averages the
+    splats in the front surface layer (within SURFACE_TOL of the nearest), so
+    single odd splats don't show as speckles; holes are filled from their
+    neighbours. Returns (image, depth buffer)."""
+    px, py, depth = view_pixels(pos, axis, toward, box, width, height)
+    size = width * height
+    offsets = [(dy, dx, 1.0 if not (dy or dx) else (0.5 if not (dy and dx) else 0.3))
+               for dy in (-1, 0, 1) for dx in (-1, 0, 1)]
+    zbuf = np.full(size, np.inf)
+    flats = []
+    for dy, dx, wt in offsets:
+        flat = (py + dy).clip(0, height - 1) * width + (px + dx).clip(0, width - 1)
+        np.minimum.at(zbuf, flat, depth)
+        flats.append((flat, wt))
+    acc = np.zeros((size, 3))
+    wsum = np.zeros(size)
+    for flat, wt in flats:
+        front = depth <= zbuf[flat] + SURFACE_TOL
+        wv = np.where(front, wt, 0.0)
+        wsum += np.bincount(flat, wv, minlength=size)
+        for c in range(3):
+            acc[:, c] += np.bincount(flat, wv * rgb[:, c], minlength=size)
+    filled = wsum > 0
+    img = np.zeros((size, 3), np.float32)
+    img[filled] = acc[filled] / wsum[filled][:, None]
+    img = img.reshape(height, width, 3)
+    filled = filled.reshape(height, width)
+    # Dark specks (dark splats from inside the body showing through gaps):
+    # pixels much darker than their neighbourhood's median take the median.
+    from scipy import ndimage
+    for _ in range(2):
+        med = np.stack([ndimage.median_filter(img[..., c], size=9) for c in range(3)], -1)
+        dark = filled & (img.mean(-1) < med.mean(-1) - 0.08)
+        # Only small blobs: long dark features (glasses frames, hair edges) stay.
+        labels, count = ndimage.label(dark)
+        if count:
+            sizes = np.bincount(labels.ravel())
+            dark &= sizes[labels] < 30
+        img[dark] = med[dark]
     # Grow colours into the small gaps that remain (and a little past the edge,
     # so texture filtering at the silhouette never pulls in black).
     for _ in range(12):
         if filled.all():
             break
-        acc = np.zeros_like(img)
+        acc2 = np.zeros_like(img)
         cnt = np.zeros((height, width), np.float32)
         for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
             shifted = np.roll(np.roll(filled, dy, 0), dx, 1)
-            acc += np.roll(np.roll(img, dy, 0), dx, 1) * shifted[..., None]
+            acc2 += np.roll(np.roll(img, dy, 0), dx, 1) * shifted[..., None]
             cnt += shifted
         grow = ~filled & (cnt > 0)
-        img[grow] = acc[grow] / cnt[grow][:, None]
+        img[grow] = acc2[grow] / cnt[grow][:, None]
         filled |= grow
-    return img
+    return img, zbuf.reshape(height, width)
 
 
-def bake_texture(pos, rgb, verts, faces, normals):
-    """Give each triangle the view (front/back/left/right) it faces most
-    directly, lay the four views side by side in one atlas (widths in
-    proportion to the body), set UVs and paint the views. Returns
-    (verts, faces, normals, uvs, source_vertex_index, png_bytes)."""
+def bake_texture(pos, rgb, verts, faces, normals, vert_bone, splat_bone):
+    """Paint the splat from front/back/left/right into one atlas and give each
+    triangle the view it faces most directly *among the views that can see
+    it*. Triangles no view sees (inner arms, armpits, between the legs) point
+    at a white texel and take their colour from vertex colours instead.
+    Returns (verts, faces, normals, uvs, vertex_colours, source_index, png)."""
     import io
     from PIL import Image
 
     pad = 0.02
     lo, hi = verts.min(0) - pad, verts.max(0) + pad
-    tri = verts[faces]
-    face_n = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
-    # View per face: 0 front (-Z), 1 back (+Z), 2 left (-X), 3 right (+X).
-    z_dominant = np.abs(face_n[:, 2]) >= np.abs(face_n[:, 0])
-    view = np.where(z_dominant, np.where(face_n[:, 2] < 0, 0, 1), np.where(face_n[:, 0] < 0, 2, 3))
-    # Atlas columns: front and back are as wide as the body, sides as deep.
     spans = [hi[0] - lo[0], hi[0] - lo[0], hi[2] - lo[2], hi[2] - lo[2]]
-    total = sum(spans)
     width = TEXTURE_SIZE * 2
-    px_w = [max(8, int(width * sp / total)) for sp in spans]
+    px_w = [max(8, int(width * sp / sum(spans))) for sp in spans]
     px_w[0] += width - sum(px_w) # rounding slack goes to the front view
     starts = np.cumsum([0] + px_w[:-1])
-    # One vertex copy per (vertex, view) so views never share a vertex.
-    keys = faces.astype(np.int64) * 4 + view[:, None]
+    boxes = [((lo[0], lo[1]), (hi[0], hi[1]))] * 2 + [((lo[2], lo[1]), (hi[2], hi[1]))] * 2
+    views = [(2, -1), (2, 1), (0, -1), (0, 1)] # front (-Z), back (+Z), left (-X), right (+X)
+    painted = [paint_view(pos, rgb, ax, tw, boxes[i], px_w[i], TEXTURE_SIZE) for i, (ax, tw) in enumerate(views)]
+
+    tri = verts[faces]
+    centre = tri.mean(1)
+    face_n = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+    face_n /= np.maximum(np.linalg.norm(face_n, axis=1, keepdims=True), 1e-12)
+    score = np.full((len(faces), 4), -np.inf)
+    for i, (ax, tw) in enumerate(views):
+        facing = face_n[:, ax] * tw # normal towards that viewer
+        _img, zbuf = painted[i]
+        seen = np.ones(len(faces), bool)
+        for pts in (tri[:, 0], tri[:, 1], tri[:, 2], centre): # every corner and the centre on the visible surface
+            px, py, depth = view_pixels(pts, ax, tw, boxes[i], px_w[i], TEXTURE_SIZE)
+            z = zbuf[py, px]
+            seen &= np.isfinite(z) & (depth <= z + VISIBLE_TOL) # no splat there = background, not visible
+        score[:, i] = np.where(seen & (facing > 0.1), facing, -np.inf)
+    view = np.argmax(score, axis=1)
+    view[~np.isfinite(score.max(1))] = 4 # hidden from every view
+    print(f'{int((view == 4).sum())} hidden triangles use vertex colours')
+
+    keys = faces.astype(np.int64) * 5 + view[:, None]
     unique, inverse = np.unique(keys.reshape(-1), return_inverse=True)
     new_faces = inverse.reshape(faces.shape).astype(np.uint32)
-    source = unique // 4
-    vview = unique % 4
+    source = unique // 5
+    vview = unique % 5
     nv = verts[source]
-    across = np.where(vview < 2, nv[:, 0], nv[:, 2])
-    amin = np.where(vview < 2, lo[0], lo[2])
-    span = np.where(vview < 2, hi[0] - lo[0], hi[2] - lo[2])
-    u = (starts[vview] + (across - amin) / span * (np.array(px_w)[vview] - 1) + 0.5) / width
-    v = (hi[1] - nv[:, 1]) / (hi[1] - lo[1])
+    u = np.full(len(nv), 2.0 / width)
+    v = np.full(len(nv), 2.0 / TEXTURE_SIZE)
+    for i in range(4):
+        m = vview == i
+        across = nv[m, 0] if i < 2 else nv[m, 2]
+        amin, span = (lo[0], hi[0] - lo[0]) if i < 2 else (lo[2], hi[2] - lo[2])
+        u[m] = (starts[i] + (across - amin) / span * (px_w[i] - 1) + 0.5) / width
+        v[m] = (hi[1] - nv[m, 1]) / (hi[1] - lo[1])
     uvs = np.stack([u, v], 1).astype(np.float32)
-    boxes = [((lo[0], lo[1]), (hi[0], hi[1]))] * 2 + [((lo[2], lo[1]), (hi[2], hi[1]))] * 2
-    views = [(2, -1), (2, 1), (0, -1), (0, 1)]
-    atlas = np.concatenate([paint_view(pos, rgb, ax, tw, boxes[i], px_w[i], TEXTURE_SIZE)
-                            for i, (ax, tw) in enumerate(views)], 1)
+    vcol = np.ones((len(nv), 3))
+    hidden = vview == 4
+    atlas = np.concatenate([img for img, _z in painted], 1)
+    # Hidden spots take the typical (median) *visible* texture colour of their
+    # body part: an inner arm gets the arm's skin, not the shirt beside it
+    # (the scan's own inner-arm splats are often shirt-coloured or dark).
+    seen_copy = ~hidden
+    tx = (uvs[seen_copy, 0] * width).astype(int).clip(0, width - 1)
+    ty = (uvs[seen_copy, 1] * TEXTURE_SIZE).astype(int).clip(0, TEXTURE_SIZE - 1)
+    seen_col = atlas[ty, tx]
+    seen_bone = vert_bone[source[seen_copy]]
+    overall = np.median(seen_col, axis=0)
+    hidden_bone = vert_bone[source[hidden]]
+    hidden_col = np.tile(overall, (int(hidden.sum()), 1))
+    for bone in np.unique(hidden_bone):
+        part = seen_col[seen_bone == bone]
+        if len(part) >= 8:
+            hidden_col[hidden_bone == bone] = np.median(part, axis=0)
+    vcol[hidden] = hidden_col
+    atlas[0:4, 0:4] = 1.0 # white texel for hidden triangles (outside the body in the front view)
     buf = io.BytesIO()
     Image.fromarray((atlas.clip(0, 1) * 255).round().astype(np.uint8)).save(buf, 'PNG', optimize=True)
-    return verts[source], new_faces, normals[source], uvs, source, buf.getvalue()
+    return nv, new_faces, normals[source], uvs, vcol, source, buf.getvalue()
 
 
 def cut_bridges(faces, joints, joints4):
@@ -449,11 +594,14 @@ def main():
         verts, faces, normals, cols = make_mesh(pos, rgb)
         joints4, weights4 = skin(verts, joints, h, info)
         faces = cut_bridges(faces, joints, joints4)
+        verts, faces, normals, cols = drop_small_pieces(verts, faces, normals, cols)
+        joints4, weights4 = geodesic_skin(verts, faces, skin(verts, joints, h, info, return_dist=True))
         if '--no-texture' in sys.argv:
             write_glb(sys.argv[2], verts, cols, joints, joints4, weights4, faces, normals)
         else:
-            verts, faces, normals, uvs, source, png = bake_texture(pos, rgb, verts, faces, normals)
-            write_glb(sys.argv[2], verts, None, joints, joints4[source], weights4[source], faces, normals, uvs, png)
+            verts, faces, normals, uvs, vcol, source, png = bake_texture(
+                pos, rgb, verts, faces, normals, joints4[:, 0], np.argmin(skin(pos, joints, h, info, return_dist=True), axis=1))
+            write_glb(sys.argv[2], verts, vcol, joints, joints4[source], weights4[source], faces, normals, uvs, png)
             print(f'texture: {TEXTURE_SIZE * 2}x{TEXTURE_SIZE}, {len(png) // 1024} KB')
         print(f'mesh: {len(verts)} vertices, {len(faces)} triangles, {len(joints)} joints -> {sys.argv[2]}')
         return

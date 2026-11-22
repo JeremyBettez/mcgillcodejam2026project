@@ -53,9 +53,10 @@ static func _use_vertex_colors(root: Node) -> void:
 			if material == null:
 				material = StandardMaterial3D.new()
 				mesh.surface_set_material(i, material)
-			if material.albedo_texture == null:
-				material.vertex_color_use_as_albedo = true
-				material.roughness = 0.9
+			# Textured meshes too: splat_to_glb.py paints hidden spots (inner
+			# arms, armpits) with vertex colours over a white texel, white elsewhere.
+			material.vertex_color_use_as_albedo = true
+			material.roughness = 0.9
 
 
 ## Point-cloud models (e.g. an IDOL splat converted by scripts/splat_to_glb.py):
