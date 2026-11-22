@@ -17,7 +17,7 @@ const SLOTS := [
 	{"id": "downtown", "name": "Downtown", "at": Vector3(0, 0, 0), "tint": Color(0.64, 0.64, 0.35)},
 	{"id": "old_montreal", "name": "Old Montréal", "at": Vector3(0, 0, 26), "tint": Color(0.67, 0.61, 0.36)},
 	{"id": "islands", "name": "The Islands", "at": Vector3(40, 0, 26), "tint": Color(0.57, 0.64, 0.36)},
-	{"id": "cote_des_neiges", "name": "Côte-des-Neiges", "at": Vector3(-40, 0, 0), "tint": Color(0.58, 0.62, 0.34)},
+	{"id": "cote_des_neiges", "name": "Côte-des-Neiges", "at": Vector3(-40, 0, 0), "tint": Color(0.58, 0.62, 0.34), "signpost": false},
 	{"id": "plateau", "name": "Plateau", "at": Vector3(40, 0, 0), "tint": Color(0.68, 0.58, 0.34)},
 	{"id": "mile_end", "name": "Mile End", "at": Vector3(40, 0, -26), "tint": Color(0.62, 0.60, 0.38)},
 	{"id": "outremont", "name": "Outremont", "at": Vector3(0, 0, -26), "tint": Color(0.60, 0.65, 0.37)},
@@ -47,28 +47,31 @@ func _init(slot_number: int) -> void:
 	display_name = info.name
 	name = "District_" + district_id
 	position = info.at
-	_build(info.tint)
+	_build(info.tint, info.get("signpost", true))
 
 
-func _build(tint: Color) -> void:
+func _build(tint: Color, signpost: bool) -> void:
 	var kit := ModelKit.new("Ground")
 	add_child(kit.root)
 	# Rounded lawn patch (a squashed disc) slightly lighter than the map.
 	var lawn := kit.cylinder(tint, 1.0, 0.02, Vector3(0, -0.002, 0), 40)
 	lawn.scale = Vector3(WIDTH * 0.5, 1.0, DEPTH * 0.5)
-	# Signpost at the front-left corner with the district's name.
-	var post_at := Vector3(-WIDTH * 0.5 + 1.0, 0, DEPTH * 0.5 - 1.0)
-	kit.cylinder(ModelKit.TRUNK, 0.08, 1.8, post_at + Vector3(0, 0.9, 0), 6)
-	kit.box(Color(0.82, 0.62, 0.40), Vector3(2.6, 0.62, 0.1), post_at + Vector3(0.9, 1.55, 0))
-	var label := Label3D.new()
-	label.text = display_name
-	label.font = UiStyle.bold()
-	label.font_size = 64
-	label.pixel_size = 0.0042
-	label.outline_size = 0
-	label.modulate = UiStyle.BROWN
-	label.position = post_at + Vector3(0.9, 1.55, 0.06)
-	kit.root.add_child(label)
+	# Signpost at the front-left corner with the district's name (a slot can
+	# turn it off with "signpost": false, e.g. when it would stand in front of
+	# a landmark).
+	if signpost:
+		var post_at := Vector3(-WIDTH * 0.5 + 1.0, 0, DEPTH * 0.5 - 1.0)
+		kit.cylinder(ModelKit.TRUNK, 0.08, 1.8, post_at + Vector3(0, 0.9, 0), 6)
+		kit.box(Color(0.82, 0.62, 0.40), Vector3(2.6, 0.62, 0.1), post_at + Vector3(0.9, 1.55, 0))
+		var label := Label3D.new()
+		label.text = display_name
+		label.font = UiStyle.bold()
+		label.font_size = 64
+		label.pixel_size = 0.0042
+		label.outline_size = 0
+		label.modulate = UiStyle.BROWN
+		label.position = post_at + Vector3(0.9, 1.55, 0.06)
+		kit.root.add_child(label)
 	# Empty-lot plots.
 	for i in LOTS.size():
 		var plot := Node3D.new()
