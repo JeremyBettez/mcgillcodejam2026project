@@ -6,6 +6,7 @@ extends RefCounted
 ##   world.json "places": [{id, name, district, lot, flag, recipe?}] + user://places/<id>.glb
 ##     (Quick build places store their "recipe" instead of a GLB)
 ##   world.json "layout": {builtin id: {district, lot}} (moved built-in places)
+##   world.json "land": [district id] (every neighbourhood the town has)
 ## Every call fails soft: it returns false/empty and the game keeps running.
 
 const INDEX_PATH := "user://world.json"
@@ -32,12 +33,12 @@ static func load_index() -> Array[Dictionary]:
 	return entries
 
 
-static func save_index(entries: Array[Dictionary], places: Array[Dictionary] = [], layout: Dictionary = {}) -> bool:
+static func save_index(entries: Array[Dictionary], places: Array[Dictionary] = [], layout: Dictionary = {}, land: Array = []) -> bool:
 	var file := FileAccess.open(INDEX_PATH, FileAccess.WRITE)
 	if file == null:
 		push_warning("WorldStore: can't write world.json (%s)" % error_string(FileAccess.get_open_error()))
 		return false
-	file.store_string(JSON.stringify({"version": VERSION, "residents": entries, "places": places, "layout": layout}, "  "))
+	file.store_string(JSON.stringify({"version": VERSION, "residents": entries, "places": places, "layout": layout, "land": land}, "  "))
 	file.close()
 	return true
 
@@ -66,6 +67,17 @@ static func load_model(id: String) -> PackedByteArray:
 static func delete_model(id: String) -> void:
 	if FileAccess.file_exists(model_path(id)):
 		DirAccess.remove_absolute(model_path(id))
+
+
+## Neighbourhoods (district ids) the town had, so land the player added (even
+## with no buildings on it yet) comes back.
+static func load_land() -> Array:
+	if not FileAccess.file_exists(INDEX_PATH):
+		return []
+	var data: Variant = JSON.parse_string(FileAccess.get_file_as_string(INDEX_PATH))
+	if data is Dictionary and (data as Dictionary).get("land") is Array:
+		return data.land
+	return []
 
 
 ## Where the built-in places were moved to: {location id: {district, lot}}.

@@ -22,6 +22,12 @@ const SLOTS := [
 	{"id": "mile_end", "name": "Mile End", "at": Vector3(40, 0, -26), "tint": Color(0.62, 0.60, 0.38)},
 	{"id": "outremont", "name": "Outremont", "at": Vector3(0, 0, -26), "tint": Color(0.60, 0.65, 0.37)},
 	{"id": "saint_henri", "name": "Saint-Henri", "at": Vector3(-40, 0, 26), "tint": Color(0.66, 0.62, 0.33)},
+	{"id": "verdun", "name": "Verdun", "at": Vector3(0, 0, 52), "tint": Color(0.63, 0.63, 0.40)},
+	{"id": "rosemont", "name": "Rosemont", "at": Vector3(40, 0, 52), "tint": Color(0.69, 0.60, 0.37)},
+	{"id": "westmount", "name": "Westmount", "at": Vector3(-40, 0, -26), "tint": Color(0.57, 0.63, 0.38)},
+	{"id": "little_italy", "name": "Little Italy", "at": Vector3(0, 0, -52), "tint": Color(0.66, 0.64, 0.36)},
+	{"id": "hochelaga", "name": "Hochelaga", "at": Vector3(80, 0, 0), "tint": Color(0.62, 0.58, 0.35)},
+	{"id": "lachine", "name": "Lachine", "at": Vector3(-40, 0, 52), "tint": Color(0.60, 0.66, 0.39)},
 ]
 
 var district_id := ""

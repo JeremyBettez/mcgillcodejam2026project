@@ -10,7 +10,7 @@ extends Node3D
 ## Debug (desktop): pass `-- --shot=<png path> [--shot-delay=<seconds>]` to save a
 ## screenshot and quit, e.g. for automated checks.
 
-const WORLD_RADIUS := 85.0 # ground disc; covers every district slot
+const WORLD_RADIUS := 110.0 # ground disc; covers every district slot
 const BLUE := UiStyle.SKY
 const MAX_PLACES := 20 # places the player can add (they fill district lots)
 const DEMO_MODEL := "res://demo/resident_demo.glb"
@@ -100,6 +100,7 @@ func _ready() -> void:
 	thumbnailer = Thumbnailer.new()
 	add_child(thumbnailer)
 	_build_locations()
+	_restore_land() # neighbourhoods the player added
 	_restore_layout() # built-in places the player moved to other plots
 	_restore_places() # before friends, so their saved homes can be found
 	_spawn_demo()
@@ -478,7 +479,36 @@ func _open_locations_list() -> void:
 				count += 1
 		items.append({"text": "%s   ·   %d friend%s" % [place.display_name, count, "" if count == 1 else "s"], "action": _on_location_row.bind(place), "location": place})
 	items.append({"text": "+  Add a location", "action": _open_add_place_form})
+	items.append({"text": "+  Add empty land (3 plots)", "action": _add_land})
 	_show_list("Locations (%d)" % locations.size(), items)
+
+
+## Grow the town: the next neighbourhood (District.SLOTS order) appears with
+## three empty plots, the camera flies over and each plot gets a golden ring.
+func _add_land() -> void:
+	_close_friends_sheet()
+	var slot := -1
+	for i in District.SLOTS.size():
+		if not districts.has(District.SLOTS[i].id):
+			slot = i
+			break
+	if slot == -1:
+		hud_status.text = "The town can't grow any bigger. Every neighbourhood is in use."
+		return
+	var district := _add_district(slot)
+	camera_rig.focus_on(district.position + Vector3(0.0, 0.0, 3.0))
+	camera_rig.view_from(district.position + Vector3(0.0, 0.0, 3.0), Vector3.BACK, 0.0, 34.0)
+	for lot in District.LOTS.size():
+		get_tree().create_timer(0.6 + 0.25 * lot).timeout.connect(_ring_burst.bind(district.lot_position(lot)))
+	_save_world()
+	hud_status.text = "New land in %s: 3 empty plots ready. Add a location or move a building there." % district.display_name
+
+
+func _restore_land() -> void:
+	for id: Variant in WorldStore.load_land():
+		var slot := District.slot_index(str(id))
+		if slot != -1 and not districts.has(str(id)):
+			_add_district(slot)
 
 
 func _on_location_row(place: Location) -> void:
@@ -964,7 +994,7 @@ func _save_world() -> void:
 		var place: Location = locations[id]
 		if not place.user_added and not place.is_queued_for_deletion():
 			layout[id] = {"district": place.district_id, "lot": place.lot}
-	if not WorldStore.save_index(entries, places, layout):
+	if not WorldStore.save_index(entries, places, layout, districts.keys()):
 		_warn_storage()
 
 
