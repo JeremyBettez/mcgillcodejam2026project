@@ -3,7 +3,7 @@ extends Button
 ## Round, thumb-sized button with a vector icon drawn in code (no image or emoji
 ## assets, so it looks the same on every phone browser).
 
-enum Icon { PAUSE, PLAY, FRIENDS, CAMERA, HOME, CLOSE }
+enum Icon { PAUSE, PLAY, FRIENDS, CAMERA, HOME, CLOSE, PIN }
 
 const PULSE_PERIOD := 2.2 # seconds between invite pulses
 
@@ -101,6 +101,13 @@ func _draw() -> void:
 		Icon.CLOSE:
 			draw_line(c + Vector2(-0.45, -0.45) * s, c + Vector2(0.45, 0.45) * s, glyph_color, 0.2 * s, true)
 			draw_line(c + Vector2(0.45, -0.45) * s, c + Vector2(-0.45, 0.45) * s, glyph_color, 0.2 * s, true)
+		Icon.PIN:
+			# Map marker: round head tapering to a point, with a hole.
+			var head := c + Vector2(0.0, -0.22) * s
+			draw_colored_polygon(PackedVector2Array([
+				head + Vector2(-0.43, 0.12) * s, c + Vector2(0.0, 0.78) * s, head + Vector2(0.43, 0.12) * s]), glyph_color)
+			draw_circle(head, 0.46 * s, glyph_color)
+			draw_circle(head, 0.18 * s, fill_color)
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 

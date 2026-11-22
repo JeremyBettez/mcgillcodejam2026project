@@ -18,6 +18,7 @@ const WALK_SPEED := 0.9
 const TURN_SPEED := 6.0
 const ARRIVE_DISTANCE := 0.3
 const HEIGHT := GlbLoader.TARGET_HEIGHT
+const FRIEND_LAYER := 2 # physics layer bit for friends
 const HOLD_HEIGHT := 1.3 # feet height while held
 const HOLD_FOLLOW := 14.0 # how quickly a held friend follows the finger
 const GRAVITY := 14.0
@@ -59,6 +60,8 @@ var status_text := "":
 		_update_tag()
 var saved := false # true for residents stored in the player's world (removable)
 var world_radius := 10.0
+## Location this friend hangs out at (null = wanders the whole map).
+var home: Location
 
 var avatar_root: Node3D
 var name_tag: Label3D
@@ -92,6 +95,9 @@ var _squash := 0.0 # landing squash, 1 -> 0
 
 func _ready() -> void:
 	motion_mode = CharacterBody3D.MOTION_MODE_FLOATING
+	# Layer 2 = friends (what taps look for); collide with buildings (layer 1) and each other.
+	collision_layer = FRIEND_LAYER
+	collision_mask = 1 | FRIEND_LAYER
 	_rng.randomize()
 
 	var shape := CapsuleShape3D.new()
@@ -515,8 +521,20 @@ func _enter_idle() -> void:
 	_stuck_time = 0.0
 
 
+## Head to the home location now (e.g. right after being assigned to it).
+func go_home() -> void:
+	if _state == State.IDLE or _state == State.WALK:
+		_enter_walk()
+
+
 func _enter_walk() -> void:
 	_state = State.WALK
+	if home and is_instance_valid(home):
+		# Hang out around their location (and head back there if thrown away).
+		_target = home.random_point(_rng)
+		var far := not home.contains(global_position)
+		_state_time = 40.0 if far else 12.0 # give up if it takes too long
+		return
 	var angle := _rng.randf() * TAU
 	var dist := sqrt(_rng.randf()) * world_radius
 	_target = Vector3(cos(angle) * dist, 0.0, sin(angle) * dist)

@@ -10,7 +10,9 @@ extends Node3D
 ## Debug (desktop): pass `-- --shot=<png path> [--shot-delay=<seconds>]` to save a
 ## screenshot and quit, e.g. for automated checks.
 
-const WORLD_RADIUS := 10.0
+const WORLD_RADIUS := 24.0
+const BLUE := Color(0.33, 0.45, 0.86)
+const MCGILL_POSITION := Vector3(0.0, 0.0, -10.0)
 const DEMO_MODEL := "res://demo/resident_demo.glb"
 const DEMO_NAME := "Kevin Tse"
 const MAX_RESIDENTS := 15 # phone performance budget, demo friend included
@@ -27,6 +29,10 @@ var hud_status: Label
 var pause_button: RoundIconButton
 var add_button: RoundIconButton
 var friends_button: RoundIconButton
+var location_button: RoundIconButton
+var locations := {} # location id -> Location
+var locations_root: Node3D
+var thumbnailer: Thumbnailer
 var add_form: AddResidentForm
 var relay: RelayClient
 
@@ -60,7 +66,9 @@ func _ready() -> void:
 	add_child(residents)
 	camera_rig = CameraRig.new()
 	camera_rig.name = "CameraRig"
-	camera_rig.position = Vector3(0.0, 1.0, 0.0)
+	# Start looking at McGill's front lawn, zoomed out enough to see the building.
+	camera_rig.position = MCGILL_POSITION + Vector3(0.0, 1.0, 5.0)
+	camera_rig.distance = 15.0
 	add_child(camera_rig)
 	camera_rig.tapped.connect(_on_tapped)
 	camera_rig.can_grab = _can_grab
@@ -76,6 +84,9 @@ func _ready() -> void:
 	add_child(relay)
 	relay.finished.connect(_on_relay_finished)
 	relay.failed.connect(_on_relay_failed)
+	thumbnailer = Thumbnailer.new()
+	add_child(thumbnailer)
+	_build_locations()
 	_spawn_demo()
 	_restore_world()
 	var autosave := Timer.new()
@@ -111,7 +122,7 @@ func _build_ground() -> void:
 	disc.top_radius = WORLD_RADIUS + 2.0
 	disc.bottom_radius = WORLD_RADIUS + 2.0
 	disc.height = 0.2
-	disc.radial_segments = 48
+	disc.radial_segments = 72
 	disc.rings = 1
 	grass.mesh = disc
 	grass.position.y = -0.1
@@ -164,7 +175,7 @@ func _build_pause_ui() -> void:
 	layer.add_child(pause_button)
 
 
-## Bottom row: Friends list button (left) and add-a-friend camera button (right).
+## Bottom row: Locations (left), Friends (centre), add a friend (right).
 func _build_bottom_bar() -> void:
 	var layer := CanvasLayer.new()
 	layer.layer = 3
@@ -172,8 +183,15 @@ func _build_bottom_bar() -> void:
 	const MARGIN := 22.0
 	const SIZE := 84.0
 
+	location_button = RoundIconButton.new(RoundIconButton.Icon.PIN, SIZE, BLUE)
+	location_button.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_LEFT, Control.PRESET_MODE_MINSIZE, MARGIN)
+	location_button.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	location_button.pressed.connect(_open_locations_list)
+	layer.add_child(location_button)
+
 	friends_button = RoundIconButton.new(RoundIconButton.Icon.FRIENDS, SIZE, TEAL)
-	friends_button.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_LEFT, Control.PRESET_MODE_MINSIZE, MARGIN)
+	friends_button.set_anchors_and_offsets_preset(Control.PRESET_CENTER_BOTTOM, Control.PRESET_MODE_MINSIZE, MARGIN)
+	friends_button.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	friends_button.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	friends_button.pressed.connect(_open_friends_sheet)
 	layer.add_child(friends_button)
@@ -195,7 +213,7 @@ func _build_bottom_bar() -> void:
 ## Hide the floating buttons while a full-screen panel (form, list) is open.
 func _set_world_ui(on: bool) -> void:
 	var i := 0
-	for control: Control in [add_button, friends_button, pause_button]:
+	for control: Control in [location_button, friends_button, add_button, pause_button]:
 		var was_visible := control.visible
 		control.visible = on
 		if on and not was_visible:
@@ -244,31 +262,44 @@ func _build_friends_sheet() -> void:
 	scroll.add_child(friends_rows)
 
 
-func _open_friends_sheet() -> void:
+## Show the slide-up list panel. `items` is [{text, action: Callable, disabled?}],
+## shown as tappable rows; `empty_text` is shown when there are none.
+func _show_list(title: String, items: Array, empty_text := "") -> void:
 	_select(null)
 	for row in friends_rows.get_children():
 		row.queue_free()
-	var friends: Array[Resident] = []
-	for child in residents.get_children():
-		if child is Resident and not child.is_queued_for_deletion():
-			friends.append(child)
-	friends_title.text = "Your friends (%d)" % friends.size()
-	if friends.is_empty():
+	friends_title.text = title
+	if items.is_empty() and not empty_text.is_empty():
 		var empty := Label.new()
-		empty.text = "No friends yet. Tap the camera to add one."
+		empty.text = empty_text
 		empty.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		empty.add_theme_font_size_override("font_size", 18)
 		friends_rows.add_child(empty)
-	for friend in friends:
+	for item: Dictionary in items:
 		var row := Button.new()
-		row.text = "%s   ·   %s" % [friend.display_name, _friend_status(friend)]
+		row.text = item.text
 		row.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		row.focus_mode = Control.FOCUS_NONE
 		row.custom_minimum_size = Vector2(0.0, 56.0)
 		row.add_theme_font_size_override("font_size", 20)
-		row.pressed.connect(_on_friend_row.bind(friend))
+		row.disabled = item.get("disabled", false)
+		if item.has("action"):
+			row.pressed.connect(item.action)
 		UiFx.add_press_bounce(row)
 		friends_rows.add_child(row)
+		# Small picture of the friend / location next to its name.
+		if item.has("friend") or item.has("location"):
+			row.custom_minimum_size.y = 72.0
+			row.expand_icon = false
+			row.add_theme_constant_override("icon_max_width", 60)
+			row.add_theme_constant_override("h_separation", 14)
+			var set_icon := func(texture: Texture2D) -> void:
+				if is_instance_valid(row):
+					row.icon = texture
+			if item.has("friend"):
+				thumbnailer.friend_portrait(item.friend, set_icon)
+			else:
+				thumbnailer.location_picture(item.location, set_icon)
 	friends_sheet.modulate.a = 0.0 # hidden until laid out, then slides up
 	friends_sheet.visible = true
 	_set_world_ui(false)
@@ -287,6 +318,21 @@ func _close_friends_sheet() -> void:
 	UiFx.slide_down(friends_sheet, func() -> void: _set_world_ui(true), 160.0)
 
 
+func _open_friends_sheet() -> void:
+	var items: Array = []
+	for friend in _friends():
+		items.append({"text": "%s   ·   %s" % [friend.display_name, _friend_status(friend)], "action": _on_friend_row.bind(friend), "friend": friend})
+	_show_list("Your friends (%d)" % items.size(), items, "No friends yet. Tap the camera to add one.")
+
+
+func _friends() -> Array[Resident]:
+	var out: Array[Resident] = []
+	for child in residents.get_children():
+		if child is Resident and not child.is_queued_for_deletion():
+			out.append(child)
+	return out
+
+
 func _on_friend_row(friend: Resident) -> void:
 	_close_friends_sheet()
 	if is_instance_valid(friend) and not friend.is_queued_for_deletion():
@@ -298,7 +344,81 @@ func _friend_status(friend: Resident) -> String:
 	var job: int = friend.get_meta("job", 0)
 	if job and _jobs.has(job):
 		return "building 3D..." if str(_jobs[job].error).is_empty() else "couldn't build"
-	return "resting" if get_tree().paused else "out for a walk"
+	if get_tree().paused:
+		return "resting"
+	if friend.home and is_instance_valid(friend.home):
+		return "at %s" % friend.home.display_name
+	return "out for a walk"
+
+
+# --- Locations ----------------------------------------------------------------
+
+func _build_locations() -> void:
+	locations_root = Node3D.new()
+	locations_root.name = "Locations"
+	add_child(locations_root)
+	# Built-in: McGill University, at the north side of the map, facing the centre.
+	var mcgill := Location.new()
+	mcgill.location_id = "mcgill"
+	mcgill.display_name = "McGill University"
+	mcgill.hangout_radius = 8.0
+	mcgill.footprint = McGillModel.FOOTPRINT
+	mcgill.position = MCGILL_POSITION
+	locations_root.add_child(mcgill)
+	mcgill.set_model(McGillModel.build())
+	locations[mcgill.location_id] = mcgill
+
+
+func _open_locations_list() -> void:
+	var items: Array = []
+	for id: String in locations:
+		var place: Location = locations[id]
+		var count := 0
+		for friend in _friends():
+			if friend.home == place:
+				count += 1
+		items.append({"text": "%s   ·   %d friend%s" % [place.display_name, count, "" if count == 1 else "s"], "action": _on_location_row.bind(place), "location": place})
+	# Coming next: photograph a place and generate its 3D model, like friends.
+	items.append({"text": "+  Add a location (coming soon)", "disabled": true})
+	_show_list("Locations (%d)" % locations.size(), items)
+
+
+func _on_location_row(place: Location) -> void:
+	_close_friends_sheet()
+	# Face the front of the location (its +Z side), slightly from above.
+	var front := place.global_transform.basis.z
+	front.y = 0.0
+	camera_rig.view_from(place.global_position + front.normalized() * 2.0, front.normalized(), deg_to_rad(-16.0), 17.0)
+	hud_status.text = "%s: %s" % [place.display_name, _who_is_at(place)]
+
+
+func _who_is_at(place: Location) -> String:
+	var names: Array[String] = []
+	for friend in _friends():
+		if friend.home == place:
+			names.append(friend.display_name)
+	return "nobody hangs out here yet." if names.is_empty() else ", ".join(names) + " hang%s out here." % ("s" if names.size() == 1 else "")
+
+
+## Pick where a friend hangs out.
+func _choose_home(friend: Resident) -> void:
+	var items: Array = []
+	for id: String in locations:
+		var place: Location = locations[id]
+		var mark := "   (current)" if friend.home == place else ""
+		items.append({"text": place.display_name + mark, "action": _set_home.bind(friend, place), "location": place})
+	items.append({"text": "Anywhere on the map" + ("   (current)" if friend.home == null else ""), "action": _set_home.bind(friend, null)})
+	_show_list("Where does %s hang out?" % friend.display_name, items)
+
+
+func _set_home(friend: Resident, place: Location) -> void:
+	_close_friends_sheet()
+	if not is_instance_valid(friend):
+		return
+	friend.home = place
+	friend.go_home()
+	_save_world()
+	hud_status.text = "%s now hangs out at %s." % [friend.display_name, place.display_name] if place else "%s can wander anywhere now." % friend.display_name
 
 
 ## Bottom bar with a message and up to two buttons (Retry/Remove...).
@@ -464,6 +584,7 @@ func _restore_world() -> void:
 		var resident := spawn_resident(str(entry.get("name", "Friend")), model, at)
 		resident.resident_id = id
 		resident.saved = true
+		resident.home = locations.get(str(entry.get("home", "")))
 
 
 func _save_world() -> void:
@@ -476,6 +597,7 @@ func _save_world() -> void:
 				"name": resident.display_name,
 				"x": snappedf(resident.global_position.x, 0.01),
 				"z": snappedf(resident.global_position.z, 0.01),
+				"home": resident.home.location_id if resident.home and is_instance_valid(resident.home) else "",
 			})
 	if not WorldStore.save_index(entries):
 		_warn_storage()
@@ -543,7 +665,13 @@ func _spawn_demo() -> void:
 	var model := GlbLoader.from_file(DEMO_MODEL)
 	if model == null:
 		hud_status.text = "Demo model not found. Showing a placeholder."
-	spawn_resident(DEMO_NAME, model, Vector3.ZERO)
+	# Kevin hangs out at McGill.
+	var mcgill: Location = locations.get("mcgill")
+	var rng := RandomNumberGenerator.new()
+	rng.randomize()
+	var at := mcgill.random_point(rng) if mcgill else Vector3.ZERO
+	var kevin := spawn_resident(DEMO_NAME, model, at)
+	kevin.home = mcgill
 
 
 func _on_tapped(screen_pos: Vector2) -> void:
@@ -555,7 +683,9 @@ func _resident_at(screen_pos: Vector2) -> Resident:
 	var cam := camera_rig.camera
 	var from := cam.project_ray_origin(screen_pos)
 	var to := from + cam.project_ray_normal(screen_pos) * 200.0
-	var hit := get_world_3d().direct_space_state.intersect_ray(PhysicsRayQueryParameters3D.create(from, to))
+	# Only look for friends, so buildings in the way don't block picking them.
+	var query := PhysicsRayQueryParameters3D.create(from, to, Resident.FRIEND_LAYER)
+	var hit := get_world_3d().direct_space_state.intersect_ray(query)
 	if hit.is_empty():
 		return null
 	return hit.get("collider") as Resident
@@ -650,12 +780,17 @@ func _select(resident: Resident) -> void:
 				[["Remove", _discard_job.bind(job)], ["Retry", _retry_job.bind(job)]])
 		return
 	hud_status.text = "%s is out for a walk." % selected.display_name
-	var buttons: Array = [["Wave", _ask_to.bind(selected, "wave")], ["Dance", _ask_to.bind(selected, "dance")]]
+	var where := " · at %s" % selected.home.display_name if selected.home and is_instance_valid(selected.home) else ""
+	var buttons: Array = [
+		["Wave", _ask_to.bind(selected, "wave")],
+		["Dance", _ask_to.bind(selected, "dance")],
+		["Home", _choose_home.bind(selected)],
+	]
 	if selected.saved:
 		buttons.append(["Remove", _remove_resident.bind(selected)])
-	var made := _show_actions(selected.display_name, buttons)
+	var made := _show_actions(selected.display_name + where, buttons)
 	if selected.saved:
-		_remove_button = made[2]
+		_remove_button = made[3]
 
 
 ## Ask a friend to wave or dance; they turn to face the player first.
