@@ -10,12 +10,9 @@ extends Node3D
 ## Debug (desktop): pass `-- --shot=<png path> [--shot-delay=<seconds>]` to save a
 ## screenshot and quit, e.g. for automated checks.
 
-const WORLD_RADIUS := 24.0
+const WORLD_RADIUS := 85.0 # ground disc; covers every district slot
 const BLUE := UiStyle.SKY
-const MCGILL_POSITION := Vector3(0.0, 0.0, -10.0)
-const MAX_PLACES := 6 # places the player can add (phone performance + map space)
-const PLACE_RING := 15.0 # new places go on a ring this far from the middle...
-const PLACE_SPACING := 11.0 # ...at least this far from any other location
+const MAX_PLACES := 20 # places the player can add (they fill district lots)
 const DEMO_MODEL := "res://demo/resident_demo.glb"
 const DEMO_NAME := "Kevin Tse"
 const MAX_RESIDENTS := 15 # phone performance budget, demo friend included
@@ -35,6 +32,7 @@ var friends_button: RoundIconButton
 var location_button: RoundIconButton
 var locations := {} # location id -> Location
 var locations_root: Node3D
+var districts := {} # district id -> District
 var thumbnailer: Thumbnailer
 var add_form: AddResidentForm
 var relay: RelayClient
@@ -70,10 +68,13 @@ func _ready() -> void:
 	add_child(residents)
 	camera_rig = CameraRig.new()
 	camera_rig.name = "CameraRig"
-	# Start looking at McGill's front lawn, zoomed out enough to see the building.
-	camera_rig.position = MCGILL_POSITION + Vector3(0.0, 1.0, 5.0)
-	camera_rig.distance = 15.0
+	# Start looking at Downtown (McGill), zoomed out enough to see the building.
+	camera_rig.position = Vector3(0.0, 1.0, 3.0)
+	camera_rig.distance = 18.0
 	add_child(camera_rig)
+	var leaves := FallingLeaves.new() # gentle autumn leaves around the view
+	leaves.follow = camera_rig
+	add_child(leaves)
 	camera_rig.tapped.connect(_on_tapped)
 	camera_rig.can_grab = _can_grab
 	camera_rig.grab_started.connect(_on_grab_started)
@@ -106,9 +107,9 @@ func _ready() -> void:
 func _build_environment() -> void:
 	var env := Environment.new()
 	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color(0.64, 0.86, 0.98) # soft pastel sky
+	env.background_color = Color(0.98, 0.83, 0.68) # hazy autumn afternoon sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.92, 0.88, 0.80) # warm daylight
+	env.ambient_light_color = Color(1.0, 0.86, 0.72) # golden autumn light
 	env.ambient_light_energy = 0.75
 	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
 	var world_env := WorldEnvironment.new()
@@ -118,6 +119,7 @@ func _build_environment() -> void:
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-50.0, 35.0, 0.0)
 	sun.light_energy = 1.1
+	sun.light_color = Color(1.0, 0.92, 0.80) # low, warm fall sun
 	sun.shadow_enabled = false # keep phones fast
 	add_child(sun)
 
@@ -133,7 +135,7 @@ func _build_ground() -> void:
 	grass.mesh = disc
 	grass.position.y = -0.1
 	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.55, 0.80, 0.42) # bright pastel grass
+	mat.albedo_color = Color(0.60, 0.62, 0.32) # late-season golden grass
 	grass.material_override = mat
 	add_child(grass)
 
@@ -387,31 +389,69 @@ func _build_locations() -> void:
 	locations_root = Node3D.new()
 	locations_root.name = "Locations"
 	add_child(locations_root)
-	# Built-in: McGill University, at the north side of the map, facing the centre.
-	var mcgill := Location.new()
-	mcgill.location_id = "mcgill"
-	mcgill.display_name = "McGill University"
-	mcgill.hangout_radius = 8.0
-	mcgill.footprint = McGillModel.FOOTPRINT
-	mcgill.position = MCGILL_POSITION
-	locations_root.add_child(mcgill)
-	mcgill.set_model(McGillModel.build())
-	locations[mcgill.location_id] = mcgill
-	# More Montreal spots on the place ring, facing the centre: the Old Port's
-	# Ferris wheel to the east and Parc Jean-Drapeau's dome to the west.
-	_add_builtin("old_port", "Old Port", OldPortModel.build(), OldPortModel.FOOTPRINT, Vector3(PLACE_RING, 0.0, 0.0), 8.0, 23.0)
-	_add_builtin("jean_drapeau", "Parc Jean-Drapeau", JeanDrapeauModel.build(), JeanDrapeauModel.FOOTPRINT, Vector3(-PLACE_RING, 0.0, 0.0), 7.5, 18.0)
+	# The town is a grid of districts (Montreal neighbourhoods), each a row of
+	# lots facing the camera. The first four hold the built-in places.
+	for i in 4:
+		_add_district(i)
+	_add_builtin("mcgill", "McGill University", McGillModel.build(), McGillModel.FOOTPRINT, "downtown", 8.0)
+	_add_builtin("starbucks", "Starbucks", CafeModels.starbucks(), CafeModels.STARBUCKS_FOOTPRINT, "downtown", 6.0, 15.0)
+	_add_builtin("mcdonalds", "McDonald's", CafeModels.mcdonalds(), CafeModels.MCDONALDS_FOOTPRINT, "downtown", 6.0, 16.0)
+	_add_builtin("oratory", "Saint Joseph's Oratory", OratoryModel.build(), OratoryModel.FOOTPRINT, "cote_des_neiges", 8.0, 30.0)
+	_add_builtin("old_port", "Old Port", OldPortModel.build(), OldPortModel.FOOTPRINT, "old_montreal", 8.0, 23.0)
+	_add_builtin("jean_drapeau", "Parc Jean-Drapeau", JeanDrapeauModel.build(), JeanDrapeauModel.FOOTPRINT, "islands", 7.5, 18.0)
 
 
-func _add_builtin(id: String, display_name: String, model: Node3D, footprint: Rect2, at: Vector3, radius: float, view_distance := 0.0) -> void:
+func _add_district(slot: int) -> District:
+	var district := District.new(slot)
+	locations_root.add_child(district)
+	districts[district.district_id] = district
+	_update_camera_bounds()
+	return district
+
+
+## Let the camera pan over every district (plus a margin), and no further.
+func _update_camera_bounds() -> void:
+	var bounds := Rect2()
+	var first := true
+	for id: String in districts:
+		var d: District = districts[id]
+		var r := Rect2(Vector2(d.position.x, d.position.z) - Vector2(District.WIDTH, District.DEPTH) * 0.5, Vector2(District.WIDTH, District.DEPTH))
+		bounds = r if first else bounds.merge(r)
+		first = false
+	camera_rig.bounds = bounds.grow(4.0)
+
+
+## A free lot for a new place: the first district (in slot order) with room,
+## otherwise a new district. Returns [District, lot] or [] when the town is full.
+func _find_lot() -> Array:
+	for slot in District.SLOTS.size():
+		var id: String = District.SLOTS[slot].id
+		var district: District = districts.get(id)
+		if district == null:
+			district = _add_district(slot)
+		var lot := district.free_lot()
+		if lot != -1:
+			return [district, lot]
+	return []
+
+
+func _put_in_lot(place: Location, district: District, lot: int) -> void:
+	place.district_id = district.district_id
+	place.lot = lot
+	place.position = district.lot_position(lot)
+	place.rotation.y = 0.0 # every front faces the camera (+Z)
+	district.occupy(lot, place.location_id)
+
+
+func _add_builtin(id: String, display_name: String, model: Node3D, footprint: Rect2, district_id: String, radius: float, view_distance := 0.0) -> void:
 	var place := Location.new()
 	place.location_id = id
 	place.display_name = display_name
 	place.hangout_radius = radius
 	place.footprint = footprint
 	place.view_distance = view_distance
-	place.position = at
-	place.rotation.y = atan2(-at.x, -at.z) # front (+Z) towards the middle of the map
+	var district: District = districts[district_id]
+	_put_in_lot(place, district, district.free_lot())
 	locations_root.add_child(place)
 	place.set_model(model)
 	locations[id] = place
@@ -489,44 +529,24 @@ func _user_place_count() -> int:
 	return count
 
 
-## An empty spot on a ring around the middle, at least PLACE_SPACING from every
-## other location, facing the centre. Returns null when the map is full.
-func _free_place_spot() -> Variant:
-	for i in 12:
-		var angle := PI * 0.5 + i * TAU / 12.0 # start at the south side, near the camera
-		var spot := Vector3(cos(angle), 0.0, sin(angle)) * PLACE_RING
-		var clear := true
-		for id: String in locations:
-			if (locations[id] as Location).global_position.distance_to(spot) < PLACE_SPACING:
-				clear = false
-				break
-		if clear:
-			return spot
-	return null
-
-
-func _make_place(id: String, display_name: String, at: Vector3, yaw: float) -> Location:
+func _make_place(id: String, display_name: String, district: District, lot: int) -> Location:
 	var place := Location.new()
 	place.location_id = id
 	place.display_name = display_name
 	place.hangout_radius = 7.0
 	place.user_added = true
-	place.position = at
-	place.rotation.y = yaw
+	_put_in_lot(place, district, lot)
 	locations_root.add_child(place)
 	locations[id] = place
 	return place
 
 
 func _on_place_submitted(display_name: String, jpeg: PackedByteArray, wants_flag: bool) -> void:
-	var spot: Variant = _free_place_spot()
-	if spot == null:
-		hud_status.text = "There's no room left on the map for another place."
+	var spot := _find_lot()
+	if spot.is_empty():
+		hud_status.text = "There's no room left in town for another place."
 		return
-	var at: Vector3 = spot
-	# Face the middle of the map: front (+Z) = direction to the centre.
-	var to_centre := -at.normalized()
-	var place := _make_place(WorldStore.new_id(), display_name, at, atan2(to_centre.x, to_centre.z))
+	var place := _make_place(WorldStore.new_id(), display_name, spot[0], spot[1])
 	# Flag: a known design for the name, otherwise colours from the photo.
 	if wants_flag:
 		var known: Variant = Flag.design_for_name(display_name)
@@ -560,6 +580,9 @@ func _delete_place(place: Location) -> void:
 		if friend.home == place:
 			friend.home = null # they wander the whole map again
 	locations.erase(place.location_id)
+	var district: District = districts.get(place.district_id)
+	if district:
+		district.release(place.location_id) # the lot shows as free again
 	if place.user_added:
 		WorldStore.delete_place_model(place.location_id)
 	place.queue_free()
@@ -575,7 +598,22 @@ func _restore_places() -> void:
 		if model == null:
 			push_warning("Skipping saved place %s: model unreadable" % id)
 			continue
-		var place := _make_place(id, str(entry.get("name", "Place")), Vector3(float(entry.get("x", 0.0)), 0.0, float(entry.get("z", 0.0))), float(entry.get("yaw", 0.0)))
+		# Back into its saved lot (creating its district); older saves, or a
+		# lot that is somehow taken, just get the next free lot.
+		var spot := []
+		var slot := District.slot_index(str(entry.get("district", "")))
+		if slot != -1:
+			var district: District = districts.get(District.SLOTS[slot].id)
+			if district == null:
+				district = _add_district(slot)
+			if district.is_free(int(entry.get("lot", -1))):
+				spot = [district, int(entry.get("lot", -1))]
+		if spot.is_empty():
+			spot = _find_lot()
+		if spot.is_empty():
+			push_warning("Skipping saved place %s: the town is full" % id)
+			continue
+		var place := _make_place(id, str(entry.get("name", "Place")), spot[0], spot[1])
 		place.flag_design = _flag_from_json(entry.get("flag"))
 		place.set_generated_model(model)
 
@@ -863,6 +901,8 @@ func _save_world() -> void:
 				"x": snappedf(place.position.x, 0.01),
 				"z": snappedf(place.position.z, 0.01),
 				"yaw": snappedf(place.rotation.y, 0.001),
+				"district": place.district_id,
+				"lot": place.lot,
 				"flag": _flag_to_json(place.flag_design),
 			})
 	if not WorldStore.save_index(entries, places):
@@ -919,7 +959,7 @@ func _notification(what: int) -> void:
 func spawn_resident(display_name: String, model: Node3D, at: Vector3) -> Resident:
 	var resident := Resident.new()
 	resident.display_name = display_name
-	resident.world_radius = WORLD_RADIUS
+	resident.world_radius = WORLD_RADIUS - 2.0
 	residents.add_child(resident)
 	resident.global_position = at
 	if model:
@@ -1065,8 +1105,24 @@ func _ask_to(friend: Resident, action: String) -> void:
 		return
 	if get_tree().paused:
 		set_paused(false) # an action you can't see would feel broken
+	if action == "dance":
+		# With a friend nearby they dance together (moonwalk or party dance);
+		# alone, a regular dance or now and then a moonwalk.
+		var partner := friend.nearby_friend()
+		if partner:
+			var style := "moonwalk" if randf() < 0.5 else "party"
+			if style == "moonwalk":
+				friend.perform(style, camera_rig.camera.global_position)
+				partner.perform(style, camera_rig.camera.global_position)
+			else:
+				friend.perform(style, partner.global_position)
+				partner.perform(style, friend.global_position)
+			hud_status.text = "%s and %s are %s!" % [friend.display_name, partner.display_name, "moonwalking" if style == "moonwalk" else "partying"]
+			return
+		action = "moonwalk" if randf() < 0.3 else "dance"
 	friend.perform(action, camera_rig.camera.global_position)
-	hud_status.text = "%s is %s!" % [friend.display_name, "waving at you" if action == "wave" else "dancing"]
+	var doing := {"wave": "waving at you", "dance": "dancing", "moonwalk": "moonwalking"}
+	hud_status.text = "%s is %s!" % [friend.display_name, doing.get(action, "dancing")]
 
 
 func _setup_debug_screenshot() -> void:
