@@ -24,6 +24,8 @@ const DEMO_MODEL_2 := "res://demo/stephen_demo.glb"
 const DEMO_NAME_2 := "Stephen Chen"
 const DEMO_MODEL_3 := "res://demo/jeremy_demo.glb"
 const DEMO_NAME_3 := "Jeremy Bettez"
+const DEMO_MODEL_4 := "res://demo/david_demo.glb"
+const DEMO_NAME_4 := "David Du"
 const MAX_RESIDENTS := 15 # phone performance budget, demo friend included
 const SAVE_INTERVAL := 15.0
 const HINT := "Drag to look around, pinch to zoom. Tap the camera to add a friend."
@@ -1120,6 +1122,11 @@ func _spawn_demo() -> void:
 	if jeremy_model:
 		var jeremy := spawn_resident(DEMO_NAME_3, jeremy_model, mcgill.random_point(rng) if mcgill else Vector3(-1.5, 0.0, 1.5))
 		jeremy.home = mcgill
+	# Fourth built-in friend: David Du (same conversion), also at McGill.
+	var david_model := GlbLoader.from_file(DEMO_MODEL_4)
+	if david_model:
+		var david := spawn_resident(DEMO_NAME_4, david_model, mcgill.random_point(rng) if mcgill else Vector3(0.0, 0.0, 2.5))
+		david.home = mcgill
 
 
 func _on_tapped(screen_pos: Vector2) -> void:
