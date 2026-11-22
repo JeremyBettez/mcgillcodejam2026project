@@ -2,13 +2,13 @@
 
 importer="font_data_dynamic"
 type="FontFile"
-uid="uid://beng8nxegg1nj"
-path="res://.godot/imported/Fredoka.ttf-298377900bfb6872c6093eeb33bab54d.fontdata"
+uid="uid://caowvxqqaoxlg"
+path="res://.godot/imported/Grandstander.ttf-88d12f1f1be0b386ae6c2f5ee133dbb2.fontdata"
 
 [deps]
 
-source_file="res://fonts/Fredoka.ttf"
-dest_files=["res://.godot/imported/Fredoka.ttf-298377900bfb6872c6093eeb33bab54d.fontdata"]
+source_file="res://fonts/Grandstander.ttf"
+dest_files=["res://.godot/imported/Grandstander.ttf-88d12f1f1be0b386ae6c2f5ee133dbb2.fontdata"]
 
 [params]
 

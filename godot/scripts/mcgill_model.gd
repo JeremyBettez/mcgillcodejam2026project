@@ -82,8 +82,9 @@ static func build() -> Node3D:
 	_box(root, mats, MCGILL_RED, Vector3(2.2, 0.6, 0.12), Vector3(-2.4, 0.65, 4.2))
 	var sign_text := Label3D.new()
 	sign_text.text = "McGill University"
+	sign_text.font = UiStyle.bold() # same font as the rest of the app
 	sign_text.font_size = 64
-	sign_text.pixel_size = 0.004
+	sign_text.pixel_size = 0.0038
 	sign_text.outline_size = 0
 	sign_text.modulate = Color.WHITE
 	sign_text.position = Vector3(-2.4, 0.65, 4.27)

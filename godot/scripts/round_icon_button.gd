@@ -1,6 +1,6 @@
 class_name RoundIconButton
 extends Button
-## Round, thumb-sized button with a vector icon drawn in code (no image or emoji
+## Round, thumb-sized button with a vector icon drawn in code (no emoji
 ## assets, so it looks the same on every phone browser).
 
 enum Icon { PAUSE, PLAY, FRIENDS, CAMERA, HOME, CLOSE, PIN }
@@ -21,6 +21,13 @@ var pulse := false:
 	set(value):
 		pulse = value
 		set_process(value)
+		queue_redraw()
+
+## Optional painted sticker (square transparent PNG) drawn instead of the round
+## button and vector icon, e.g. the goose mascot on the Friends button.
+var picture: Texture2D:
+	set(value):
+		picture = value
 		queue_redraw()
 
 var _pulse_time := 0.0
@@ -68,9 +75,16 @@ func _draw() -> void:
 			var p := k / 0.6
 			draw_arc(c, r + 4.0 + p * 18.0, 0.0, TAU, 48, Color(fill_color, 0.55 * (1.0 - p)), 4.0 * (1.0 - p) + 1.0, true)
 	r *= 0.94 if is_down else 1.0
+	if picture:
+		# A painted sticker (transparent PNG with its own border/shadow): no disc.
+		var half := minf(size.x, size.y) * 0.5 * (0.92 if is_down else 1.0)
+		draw_texture_rect(picture, Rect2(c - Vector2(half, half), Vector2(half, half) * 2.0), false,
+				Color(0.88, 0.88, 0.88) if is_down else Color.WHITE)
+		return
 	draw_circle(c + Vector2(0.0, 4.0), r, UiStyle.SHADOW) # soft warm shadow
 	draw_circle(c, r, ring_color)
-	draw_circle(c, r - maxf(3.0, r * 0.08), fill_color.darkened(0.15) if is_down else fill_color)
+	var inner := r - maxf(3.0, r * 0.08)
+	draw_circle(c, inner, fill_color.darkened(0.15) if is_down else fill_color)
 	if _icon_turn != 0.0:
 		draw_set_transform(c, _icon_turn, Vector2.ONE)
 		c = Vector2.ZERO

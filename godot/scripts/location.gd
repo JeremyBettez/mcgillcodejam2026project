@@ -23,6 +23,8 @@ var display_name := "Location":
 var hangout_radius := 6.0
 ## ...but not inside the building footprint (local XZ rectangle, centred).
 var footprint := Rect2(Vector2(-1.0, -1.0), Vector2(2.0, 2.0))
+## Camera distance when flying here from the Locations list (0 = fit the footprint).
+var view_distance := 0.0
 var user_added := false # added by the player (saved, removable)
 var flag_design: Variant = null # null, "mcgill", or {"colors": [field, accent]}
 ## Second line on the name sign, e.g. "building 3D..." while generating.

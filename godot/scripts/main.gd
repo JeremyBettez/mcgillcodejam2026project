@@ -202,23 +202,29 @@ func _build_bottom_bar() -> void:
 	var layer := CanvasLayer.new()
 	layer.layer = 3
 	add_child(layer)
-	const MARGIN := 22.0
-	const SIZE := 84.0
+	const MARGIN := 14.0
+	const STICKER := 108.0
 
-	location_button = RoundIconButton.new(RoundIconButton.Icon.PIN, SIZE, BLUE)
+	# Painted sticker icons (godot/icons/); each falls back to its drawn icon.
+	location_button = RoundIconButton.new(RoundIconButton.Icon.PIN, STICKER, BLUE)
+	location_button.picture = _sticker("res://icons/pin.png")
 	location_button.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_LEFT, Control.PRESET_MODE_MINSIZE, MARGIN)
 	location_button.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	location_button.pressed.connect(_open_locations_list)
 	layer.add_child(location_button)
 
-	friends_button = RoundIconButton.new(RoundIconButton.Icon.FRIENDS, SIZE, TEAL)
+	# The middle button is the app's mascot (a travelling goose), a bit bigger.
+	# Falls back to the drawn two-friends icon if the picture is missing.
+	friends_button = RoundIconButton.new(RoundIconButton.Icon.FRIENDS, 136.0, TEAL)
+	friends_button.picture = _sticker("res://icons/goose.png")
 	friends_button.set_anchors_and_offsets_preset(Control.PRESET_CENTER_BOTTOM, Control.PRESET_MODE_MINSIZE, MARGIN)
 	friends_button.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	friends_button.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	friends_button.pressed.connect(_open_friends_sheet)
 	layer.add_child(friends_button)
 
-	add_button = RoundIconButton.new(RoundIconButton.Icon.CAMERA, SIZE, ORANGE)
+	add_button = RoundIconButton.new(RoundIconButton.Icon.CAMERA, STICKER, ORANGE)
+	add_button.picture = _sticker("res://icons/camera.png")
 	add_button.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT, Control.PRESET_MODE_MINSIZE, MARGIN)
 	add_button.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	add_button.grow_vertical = Control.GROW_DIRECTION_BEGIN
@@ -230,6 +236,11 @@ func _build_bottom_bar() -> void:
 	layer.add_child(add_form)
 	add_form.submitted.connect(_on_photo_submitted)
 	add_form.closed.connect(_on_add_form_closed)
+
+
+func _sticker(path: String) -> Texture2D:
+	var texture: Variant = load(path) if ResourceLoader.exists(path) else null
+	return texture as Texture2D
 
 
 ## Hide the floating buttons while a full-screen panel (form, list) is open.
@@ -386,6 +397,24 @@ func _build_locations() -> void:
 	locations_root.add_child(mcgill)
 	mcgill.set_model(McGillModel.build())
 	locations[mcgill.location_id] = mcgill
+	# More Montreal spots on the place ring, facing the centre: the Old Port's
+	# Ferris wheel to the east and Parc Jean-Drapeau's dome to the west.
+	_add_builtin("old_port", "Old Port", OldPortModel.build(), OldPortModel.FOOTPRINT, Vector3(PLACE_RING, 0.0, 0.0), 8.0, 23.0)
+	_add_builtin("jean_drapeau", "Parc Jean-Drapeau", JeanDrapeauModel.build(), JeanDrapeauModel.FOOTPRINT, Vector3(-PLACE_RING, 0.0, 0.0), 7.5, 18.0)
+
+
+func _add_builtin(id: String, display_name: String, model: Node3D, footprint: Rect2, at: Vector3, radius: float, view_distance := 0.0) -> void:
+	var place := Location.new()
+	place.location_id = id
+	place.display_name = display_name
+	place.hangout_radius = radius
+	place.footprint = footprint
+	place.view_distance = view_distance
+	place.position = at
+	place.rotation.y = atan2(-at.x, -at.z) # front (+Z) towards the middle of the map
+	locations_root.add_child(place)
+	place.set_model(model)
+	locations[id] = place
 
 
 func _open_locations_list() -> void:
@@ -421,7 +450,10 @@ func _fly_to_place(place: Location) -> void:
 	var fit := width * 0.5 / tan(half_h_fov) + place.footprint.size.y * 0.5
 	# Capped and looking a bit more downward, so other buildings between us and the
 	# place (places face the middle of the map) don't block the view.
-	camera_rig.view_from(place.global_position + front.normalized() * 1.0, front.normalized(), deg_to_rad(-26.0), clampf(fit, 13.0, 21.0))
+	var distance := clampf(fit, 13.0, 21.0)
+	if place.view_distance > 0.0:
+		distance = place.view_distance # tall or round models (Ferris wheel, dome)
+	camera_rig.view_from(place.global_position + front.normalized() * 1.0, front.normalized(), deg_to_rad(-26.0), distance)
 
 
 ## Bar for a location: Retry/Remove while its model failed, Remove for places
