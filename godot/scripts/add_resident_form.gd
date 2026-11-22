@@ -1,14 +1,12 @@
 class_name AddResidentForm
 extends Control
-## "Add a resident" card: photo (camera or library), name, consent, Generate.
+## "Add a friend" card: photo (camera or library), name, Generate.
 ## The photo stays in memory only; it is handed out with `submitted` and then dropped.
 
 signal submitted(display_name: String, jpeg: PackedByteArray)
 signal closed
 
-const CONSENT_TEXT := "I have this person's permission"
 const NAME_PLACEHOLDER := "Tap to enter their name"
-const PRIVACY_TEXT := "The photo is sent to Hugging Face to build the 3D model. It is not saved in the game."
 
 var bridge: PhotoBridge
 
@@ -17,7 +15,6 @@ var _preview: TextureRect
 var _preview_hint: Label
 var _name_edit: LineEdit # holds the name on every platform (hidden on web)
 var _name_button: Button # web only: opens the browser prompt
-var _consent: CheckBox
 var _status: Label
 var _generate: Button
 var _camera_button: Button
@@ -50,7 +47,7 @@ func _ready() -> void:
 	box.add_theme_constant_override("separation", 12)
 	card.add_child(box)
 
-	box.add_child(_label("Add a resident", 28))
+	box.add_child(_label("Add a friend", 28))
 	var tip := _label("Full body in the photo: head to feet, facing the camera, arms a little away from the body.", 16)
 	tip.modulate = Color(0.8, 0.85, 0.9)
 	box.add_child(tip)
@@ -96,15 +93,6 @@ func _ready() -> void:
 	_name_edit.visible = not on_web
 	_name_button.visible = on_web
 
-	_consent = CheckBox.new()
-	_consent.text = CONSENT_TEXT
-	_consent.add_theme_font_size_override("font_size", 18)
-	_consent.focus_mode = Control.FOCUS_NONE
-	_consent.toggled.connect(func(_on: bool) -> void: _refresh())
-	box.add_child(_consent)
-	var privacy := _label(PRIVACY_TEXT, 15)
-	privacy.modulate = Color(0.8, 0.85, 0.9)
-	box.add_child(privacy)
 
 	_status = _label("", 16)
 	_status.modulate = Color(1.0, 0.6, 0.55)
@@ -143,7 +131,6 @@ func _reset() -> void:
 	_preview_hint.text = "No photo yet"
 	_preview_hint.visible = true
 	_set_name("")
-	_consent.button_pressed = false
 	_show_status("")
 	_refresh()
 
@@ -181,7 +168,7 @@ func _set_name(value: String) -> void:
 
 func _on_generate() -> void:
 	var display_name := _name_edit.text.strip_edges()
-	if _jpeg.is_empty() or display_name.is_empty() or not _consent.button_pressed:
+	if _jpeg.is_empty() or display_name.is_empty():
 		return
 	var jpeg := _jpeg
 	submitted.emit(display_name, jpeg)
@@ -189,7 +176,7 @@ func _on_generate() -> void:
 
 
 func _refresh() -> void:
-	_generate.disabled = _jpeg.is_empty() or _name_edit.text.strip_edges().is_empty() or not _consent.button_pressed
+	_generate.disabled = _jpeg.is_empty() or _name_edit.text.strip_edges().is_empty()
 
 
 func _show_status(message: String) -> void:

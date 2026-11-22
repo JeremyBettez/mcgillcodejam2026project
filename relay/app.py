@@ -21,6 +21,9 @@ from PIL import Image, ImageOps
 ANIGEN_SPACE = os.environ.get('ANIGEN_SPACE', 'VAST-AI/AniGen')
 HF_TOKEN = os.environ.get('HF_TOKEN') or None
 MAX_SIDE = 1024
+# Local testing only: return this GLB instead of calling AniGen (never set on the Space).
+FAKE_GLB = os.environ.get('RELAY_FAKE_GLB') or None
+FAKE_DELAY_S = float(os.environ.get('RELAY_FAKE_DELAY', '8'))
 
 # Settings that produced a ~2.4k-triangle, 512 px, 22-bone model in Phase 0.
 GENERATE = dict(
@@ -88,6 +91,17 @@ def connect(download_dir, attempts=3):
             time.sleep(3 * attempt)
 
 
+def fake_result(small_photo):
+    """Test mode (RELAY_FAKE_GLB set): skip AniGen and its GPU quota, return a known GLB."""
+    if not os.path.isfile(FAKE_GLB):
+        raise gr.Error(f'RELAY_FAKE_GLB file not found: {FAKE_GLB}')
+    time.sleep(FAKE_DELAY_S)
+    out_dir = tempfile.mkdtemp(prefix='phototown_out_')
+    mesh_out = shutil.copy(FAKE_GLB, os.path.join(out_dir, 'resident.glb'))
+    cutout_out = shutil.copy(small_photo, os.path.join(out_dir, 'cutout.jpg'))
+    return mesh_out, cutout_out
+
+
 def generate(photo_path):
     if not photo_path:
         raise gr.Error('No photo received.')
@@ -98,6 +112,8 @@ def generate(photo_path):
             small = shrink_photo(photo_path, work)
         except Exception:
             raise gr.Error('That file is not a readable image.')
+        if FAKE_GLB:
+            return fake_result(small)
         try:
             # A new Client is a new AniGen session, so concurrent players never share state.
             client = connect(work)

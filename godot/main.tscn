@@ -1,6 +1,7 @@
-[gd_scene format=3]
+[gd_scene format=3 uid="uid://cqq362gn0twmm"]
 
-[ext_resource type="Script" path="res://scripts/main.gd" id="1_main"]
+[ext_resource type="Script" uid="uid://dndnp7xhl6s4a" path="res://scripts/main.gd" id="1_main"]
 
-[node name="Main" type="Node3D"]
+[node name="Main" type="Node3D" unique_id=22769936]
 script = ExtResource("1_main")
+metadata/_yhde_id = "d9c6b03f-512b-5218-8d26-09ecf6cc780a"

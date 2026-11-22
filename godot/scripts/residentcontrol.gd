@@ -28,12 +28,10 @@ var _state := State.IDLE
 var _state_time := 0.0
 var _target := Vector3.ZERO
 var _stuck_time := 0.0
-var _rng := RandomNumberGenerator.new()
-
+var dir := Vector3.ZERO
 
 func _ready() -> void:
 	motion_mode = CharacterBody3D.MOTION_MODE_FLOATING
-	_rng.randomize()
 
 	var shape := CapsuleShape3D.new()
 	shape.radius = 0.3
@@ -75,7 +73,6 @@ func _ready() -> void:
 
 	if avatar_root.get_child_count() == 0:
 		show_placeholder()
-	_enter_idle()
 
 
 ## Replace the avatar with a loaded, normalized GLB scene.
@@ -120,32 +117,12 @@ func _clear_avatar() -> void:
 
 func _physics_process(delta: float) -> void:
 	_state_time -= delta
-	match _state:
-		State.IDLE:
-			velocity = Vector3.ZERO
-			if _state_time <= 0.0:
-				_enter_walk()
-		State.WALK:
-			var to_target := _target - global_position
-			to_target.y = 0.0
-			if to_target.length() < ARRIVE_DISTANCE or _state_time <= 0.0:
-				_enter_idle()
-			else:
-				var dir := to_target.normalized()
-				velocity = dir * WALK_SPEED
-				# Model faces -Z: yaw that points -Z along dir.
-				var yaw := atan2(-dir.x, -dir.z)
-				rotation.y = lerp_angle(rotation.y, yaw, minf(1.0, TURN_SPEED * delta))
+	var angle := get_viewport().get_mouse_position()
+	dir.x = angle.x
+	dir.y = angle.y
+	velocity = dir * WALK_SPEED
 	move_and_slide()
 	global_position.y = 0.0
-	# Blocked by another resident: give up on this target.
-	if _state == State.WALK and get_real_velocity().length() < WALK_SPEED * 0.2:
-		_stuck_time += delta
-		if _stuck_time > 0.8:
-			_enter_idle()
-	else:
-		_stuck_time = 0.0
-
 
 func _process(delta: float) -> void:
 	var walking := _state == State.WALK
@@ -156,16 +133,5 @@ func _process(delta: float) -> void:
 		avatar_root.rotation.z = sin(_gait.phase) * 0.08 * _gait.amount
 		avatar_root.position.y = absf(sin(_gait.phase)) * 0.05 * _gait.amount
 
-
-func _enter_idle() -> void:
-	_state = State.IDLE
-	_state_time = _rng.randf_range(1.5, 4.0)
-	_stuck_time = 0.0
-
-
 func _enter_walk() -> void:
 	_state = State.WALK
-	var angle := _rng.randf() * TAU
-	var dist := sqrt(_rng.randf()) * world_radius
-	_target = Vector3(cos(angle) * dist, 0.0, sin(angle) * dist)
-	_state_time = 12.0 # give up if it takes too long

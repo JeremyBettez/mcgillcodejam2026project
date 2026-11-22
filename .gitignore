@@ -16,3 +16,7 @@ godot/addons/yhde/bin/~*
 
 # Real person's demo model: kept local, never committed
 godot/demo/*.glb
+
+# Local Python env for running the relay
+relay/.venv/
+__pycache__/
