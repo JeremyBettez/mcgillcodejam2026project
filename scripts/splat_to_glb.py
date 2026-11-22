@@ -372,6 +372,15 @@ def paint_view(pos, rgb, axis, toward, box, width, height):
             sizes = np.bincount(labels.ravel())
             dark &= sizes[labels] < 30
         img[dark] = med[dark]
+    # Below the head (clothes, arms, legs are plain in the reference photos):
+    # larger dark blotches go too. The head keeps glasses, hair and eyes.
+    body = int(0.17 * height)
+    med = np.stack([ndimage.median_filter(img[body:, :, c], size=15) for c in range(3)], -1)
+    dark = filled[body:] & (img[body:].mean(-1) < med.mean(-1) - 0.07)
+    labels, count = ndimage.label(dark)
+    if count:
+        dark &= np.bincount(labels.ravel())[labels] < 400
+    img[body:][dark] = med[dark]
     # Grow colours into the small gaps that remain (and a little past the edge,
     # so texture filtering at the silhouette never pulls in black).
     for _ in range(12):
