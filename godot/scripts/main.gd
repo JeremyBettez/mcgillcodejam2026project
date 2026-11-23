@@ -258,6 +258,7 @@ func _build_bottom_bar() -> void:
 	layer.add_child(add_form)
 	add_form.submitted.connect(_on_photo_submitted)
 	add_form.closed.connect(_on_add_form_closed)
+	add_form.bridge.body_analyzed.connect(_on_body_analyzed)
 
 
 func _sticker(path: String) -> Texture2D:
@@ -843,16 +844,126 @@ func _on_photo_submitted(display_name: String, jpeg: PackedByteArray) -> void:
 	if add_form.mode == "place":
 		_on_place_submitted(display_name, jpeg, add_form.wants_flag(), add_form.wants_detailed())
 		return
-	# A placeholder walks around while the relay builds the model (1-3 minutes).
+	if display_name.strip_edges().to_lower() == "david du":
+		_make_david("David Du")
+		return
+	# A placeholder walks around while the model is made: a few seconds for the
+	# base mesh built on this device, 1-3 minutes for a detailed scan (relay).
+	var scan := add_form.wants_detailed()
 	var angle := randf() * TAU
 	var spot := Vector3(cos(angle), 0.0, sin(angle)) * randf_range(1.5, 3.5)
 	var resident := spawn_resident(display_name, null, spot)
 	var job := _next_job
 	_next_job += 1
 	resident.set_meta("job", job)
-	_jobs[job] = {"resident": resident, "jpeg": jpeg, "error": ""}
+	_jobs[job] = {"resident": resident, "jpeg": jpeg, "error": "", "style": "scan" if scan else "base"}
 	_start_job(job)
-	hud_status.text = "Building %s's 3D model. This takes 1-3 minutes." % display_name
+	if scan:
+		hud_status.text = "Building %s's 3D model. This takes 1-3 minutes." % display_name
+	else:
+		hud_status.text = "Making %s from the photo..." % display_name
+
+
+## Demo shortcut: adding a friend named "David Du" (any case, any photo)
+## skips the relay and makes no new friend: a 10 s fake "generating" show in
+## front of McGill, then the existing David Du pops up there with a ring
+## burst, the camera jumps to him and he waves.
+func _make_david(display_name: String) -> void:
+	var david: Resident = null
+	for node in residents.get_children():
+		if node is Resident and (node as Resident).display_name.to_lower() == display_name.to_lower():
+			david = node
+			break
+	if david == null:
+		hud_status.text = "%s isn't in this town." % display_name
+		return
+	var mcgill: Location = locations.get("mcgill")
+	var spot := Vector3.ZERO
+	if mcgill:
+		spot = mcgill.global_position + Vector3(0.0, 0.0, mcgill.footprint.end.y + 3.0)
+	camera_rig.view_from(spot + Vector3(0.0, 0.9, 0.0), Vector3.BACK, 0.0, 7.0)
+	await _fake_build(spot, display_name, 10.0)
+	if not is_instance_valid(david) or david.is_queued_for_deletion():
+		return
+	# He pops up right where the hologram was, in front of McGill (in view).
+	if not david.is_held():
+		david.global_position = spot
+		david.velocity = Vector3.ZERO
+		david._enter_idle()
+	camera_rig.view_from(david.global_position + Vector3(0.0, 0.9, 0.0), Vector3.BACK, 0.0, 5.0)
+	_ring_burst(Vector3(david.global_position.x, 0.0, david.global_position.z))
+	david._pop = 0.2
+	create_tween().tween_property(david, "_pop", 1.0, 0.35).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	david.perform("wave", camera_rig.camera.global_position)
+	_select(david)
+	hud_status.text = "%s is now your friend!" % display_name
+
+
+## ~10 s "generating the mesh" show: a glowing column of light with a
+## spinning, slowly filling body-shaped hologram, rings pulsing up from the
+## ground, and the status line stepping through pipeline stages with a %.
+func _fake_build(spot: Vector3, display_name: String, seconds: float) -> void:
+	var fx := Node3D.new()
+	add_child(fx)
+	fx.global_position = spot
+	var gold := Color(1.0, 0.8, 0.3)
+	var beam := MeshInstance3D.new()
+	var cyl := CylinderMesh.new()
+	cyl.top_radius = 0.55
+	cyl.bottom_radius = 0.7
+	cyl.height = 3.0
+	beam.mesh = cyl
+	beam.position.y = 1.5
+	var beam_mat := StandardMaterial3D.new()
+	beam_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	beam_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	beam_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	beam_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	beam_mat.albedo_color = Color(gold, 0.1)
+	beam.material_override = beam_mat
+	fx.add_child(beam)
+	# A capsule "body" made of light that fills up from the feet.
+	var holo := MeshInstance3D.new()
+	var cap := CapsuleMesh.new()
+	cap.radius = 0.28
+	cap.height = 1.7
+	holo.mesh = cap
+	var holo_mat := StandardMaterial3D.new()
+	holo_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	holo_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	holo_mat.albedo_color = Color(0.25, 0.7, 1.0, 0.5)
+	holo.material_override = holo_mat
+	holo.scale = Vector3(1.0, 0.02, 1.0)
+	fx.add_child(holo)
+	var stages := ["Reading the photo", "Finding the body", "Building the mesh", "Rigging the skeleton", "Painting textures", "Final touches"]
+	var t := 0.0
+	var next_ring := 0.0
+	while t < seconds:
+		await get_tree().process_frame
+		if not is_instance_valid(fx):
+			return
+		var dt := get_process_delta_time()
+		t += dt
+		var k := clampf(t / seconds, 0.0, 1.0)
+		var fill := 1.0 - pow(1.0 - k, 2.0) # fast at first, slowing near the end
+		holo.scale = Vector3(1.0, maxf(fill, 0.02), 1.0)
+		holo.position.y = 0.85 * fill
+		holo.rotation.y += dt * 2.5
+		holo_mat.albedo_color.a = 0.45 + 0.15 * sin(t * 9.0)
+		beam.rotation.y -= dt * 1.2
+		beam_mat.albedo_color.a = 0.08 + 0.04 * sin(t * 5.0)
+		if t >= next_ring:
+			_ring_burst(spot)
+			next_ring += 2.0
+		var stage: String = stages[mini(int(k * stages.size()), stages.size() - 1)]
+		var line := "%s... %d%%\nGenerating %s's 3D model" % [stage, int(fill * 10.0) * 10 if fill < 0.99 else 99, display_name]
+		if hud_status.text != line: # only on changes: the status line animates each new text
+			hud_status.text = line
+	var out := create_tween()
+	out.tween_property(beam_mat, "albedo_color:a", 0.0, 0.3)
+	out.parallel().tween_property(holo, "scale", Vector3(1.6, 1.2, 1.6), 0.3)
+	out.parallel().tween_property(holo_mat, "albedo_color:a", 0.0, 0.3)
+	out.tween_callback(fx.queue_free)
 
 
 func _start_job(job: int) -> void:
@@ -866,6 +977,10 @@ func _start_job(job: int) -> void:
 		else:
 			place.status_text = "building 3D..."
 			relay.generate(job, info.jpeg, "generate_place")
+		return
+	if info.get("style") == "base":
+		(info.resident as Resident).status_text = "reading photo..."
+		add_form.bridge.analyze_body(job, info.jpeg)
 		return
 	(info.resident as Resident).status_text = "building 3D..."
 	relay.generate(job, info.jpeg)
@@ -906,6 +1021,30 @@ func _on_relay_finished(job: int, glb: PackedByteArray) -> void:
 		_warn_storage()
 	if selected == resident:
 		_select(resident)
+
+
+## Base-mesh friends: the photo was read on the device (or couldn't be, then a
+## default body is used); BodyBuilder makes the model, which is saved as a GLB
+## and loaded back like any generated model.
+func _on_body_analyzed(job: int, result: Dictionary) -> void:
+	if _job_target(job) == null or _jobs[job].get("kind") == "place":
+		_jobs.erase(job)
+		return
+	if not result.get("ok", false) and str(result.get("reason", "")) == "no_person":
+		_on_relay_failed(job, "No person found in that photo. Try one with their whole body, facing the camera.")
+		return
+	var model := BodyBuilder.build(_jobs[job].jpeg, result)
+	var glb := BodyBuilder.to_glb(model) if model else PackedByteArray()
+	if model:
+		model.free()
+	if glb.is_empty():
+		_on_relay_failed(job, "Couldn't make a 3D model from that photo.")
+		return
+	var rough: bool = not result.get("ok", false)
+	var display_name := (_jobs[job].resident as Resident).display_name
+	_on_relay_finished(job, glb)
+	if rough:
+		hud_status.text = "%s is here! (The body couldn't be read, so this is a rough version.)" % display_name
 
 
 func _on_place_built(job: int, glb: PackedByteArray) -> void:
@@ -1076,6 +1215,36 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	if key and key.pressed and not key.echo and (key.keycode == KEY_ESCAPE or key.keycode == KEY_P):
 		toggle_pause()
 		get_viewport().set_input_as_handled()
+	elif key and key.pressed and not key.echo and _is_group_photo_key(key):
+		_toggle_group_photo()
+		get_viewport().set_input_as_handled()
+
+
+## "]" however the keyboard makes it: the typed character (AltGr layouts such
+## as French Canadian), the key's own code, or the physical key right of P.
+func _is_group_photo_key(key: InputEventKey) -> bool:
+	return key.unicode == 93 or key.keycode == KEY_BRACKETRIGHT or key.physical_keycode == KEY_BRACKETRIGHT or key.key_label == KEY_BRACKETRIGHT
+
+
+## "]" : every friend lines up in front of McGill facing the camera and stands
+## still (group photo). Press again to let them wander.
+var _group_photo := false
+
+
+func _toggle_group_photo() -> void:
+	_group_photo = not _group_photo
+	var friends: Array = residents.get_children().filter(func(n: Node) -> bool: return n is Resident)
+	if not _group_photo:
+		for f in friends:
+			(f as Resident).end_pose()
+		return
+	var mcgill: Location = locations.get("mcgill")
+	var centre := mcgill.global_position + Vector3(0.0, 0.0, mcgill.footprint.end.y + 2.5) if mcgill else Vector3.ZERO
+	var spacing := 1.1
+	for i in friends.size():
+		var x := (i - (friends.size() - 1) * 0.5) * spacing
+		(friends[i] as Resident).pose_at(centre + Vector3(x, 0.0, 0.0))
+	camera_rig.view_from(centre + Vector3(0.0, 0.9, 0.0), Vector3.BACK, 0.0, maxf(7.5, friends.size() * 2.0))
 
 
 func _notification(what: int) -> void:

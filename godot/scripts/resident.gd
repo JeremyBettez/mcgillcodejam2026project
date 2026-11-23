@@ -402,6 +402,9 @@ func _ground_physics(delta: float) -> void:
 	match _state:
 		State.IDLE:
 			velocity = Vector3.ZERO
+			if posing: # group photo: stand still, face the viewer
+				_face_camera(delta)
+				return
 			if _state_time <= 0.0:
 				if _rng.randf() < SOCIAL_CHANCE:
 					_social_moment()
@@ -649,6 +652,33 @@ func _enter_idle() -> void:
 func go_home() -> void:
 	if _state == State.IDLE or _state == State.WALK:
 		_enter_walk()
+
+
+## Group photo: pop to `spot` and stand there facing the camera until
+## end_pose() (the "]" key in main.gd).
+var posing := false
+
+
+func pose_at(spot: Vector3) -> void:
+	if is_held():
+		return
+	posing = true
+	if name_tag:
+		name_tag.visible = false # clean photo
+	global_position = Vector3(spot.x, 0.0, spot.z)
+	velocity = Vector3.ZERO
+	_tumble_speed = 0.0
+	_tumble_angle = 0.0
+	_enter_idle()
+	_pop = 0.2
+	create_tween().tween_property(self, "_pop", 1.0, 0.35).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+
+func end_pose() -> void:
+	posing = false
+	if name_tag:
+		name_tag.visible = true
+	_state_time = 0.0
 
 
 ## Jump straight to a spot in the home location (e.g. right after it changes)
